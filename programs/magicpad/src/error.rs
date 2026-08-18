@@ -39,4 +39,6 @@ pub enum MagicPadError {
     WrongLaunch, // 6016
     #[msg("pot not funded yet — retry after loser sessions reconcile")]
     PotNotReady, // 6017
+    #[msg("top-up already applied")]
+    AlreadyApplied, // 6018
 }

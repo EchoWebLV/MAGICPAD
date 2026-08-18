@@ -50,6 +50,7 @@ pub const E_BAD_METADATA: u32 = 14;
 pub const E_UNAUTHORIZED: u32 = 15;
 pub const E_WRONG_LAUNCH: u32 = 16;
 pub const E_POT_NOT_READY: u32 = 17;
+pub const E_ALREADY_APPLIED: u32 = 18;
 
 pub fn program_id() -> Address {
     "27HH4WUhKMmkza5NTpAjwhHkRwiPotPw55HxvjDRDsws".parse().unwrap()
@@ -79,6 +80,13 @@ pub fn mint_pda(id: u64) -> Address {
 pub fn session_pda(launch_id: u64, trader: &Address) -> Address {
     Address::find_program_address(
         &[b"tsession", &launch_id.to_le_bytes(), trader.as_ref()],
+        &program_id(),
+    )
+    .0
+}
+pub fn topup_pda(launch_id: u64, trader: &Address, nonce: u64) -> Address {
+    Address::find_program_address(
+        &[b"topup", &launch_id.to_le_bytes(), trader.as_ref(), &nonce.to_le_bytes()],
         &program_id(),
     )
     .0
@@ -285,6 +293,65 @@ pub fn sell_ix(session_key: &Address, trader: &Address, launch_id: u64, tokens_i
     }
 }
 
+#[derive(borsh::BorshSerialize)]
+pub struct TopUpSessionArgs {
+    pub launch_id: u64,
+    pub nonce: u64,
+    pub amount: u64,
+}
+
+pub fn top_up_session_ix(
+    trader: &Address,
+    launch_id: u64,
+    nonce: u64,
+    amount: u64,
+) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*trader, true),
+            AccountMeta::new_readonly(session_pda(launch_id, trader), false),
+            AccountMeta::new_readonly(launch_pda(launch_id), false),
+            AccountMeta::new(topup_pda(launch_id, trader, nonce), false),
+            AccountMeta::new_readonly(system_id(), false),
+        ],
+        data: ix_data("top_up_session", &TopUpSessionArgs { launch_id, nonce, amount }),
+    }
+}
+
+/// the in-ER consume. In litesvm it runs as a plain program ix — the
+/// SESSION KEY signs, the deposit ceiling grows by the note's amount.
+pub fn apply_top_up_ix(
+    session_key: &Address,
+    trader: &Address,
+    launch_id: u64,
+    nonce: u64,
+) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(*session_key, true),
+            AccountMeta::new(session_pda(launch_id, trader), false),
+            AccountMeta::new_readonly(launch_pda(launch_id), false),
+            AccountMeta::new(topup_pda(launch_id, trader, nonce), false),
+        ],
+        data: ix_data("apply_top_up", &nonce),
+    }
+}
+
+/// permissionless crank, trader not a signer — mirrors reconcile.
+pub fn absorb_top_up_ix(trader: &Address, launch_id: u64, nonce: u64) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*trader, false),
+            AccountMeta::new(session_pda(launch_id, trader), false),
+            AccountMeta::new(topup_pda(launch_id, trader, nonce), false),
+        ],
+        data: ix_data_empty("absorb_top_up"),
+    }
+}
+
 pub fn freeze_launch_ix(admin: &Address, launch_id: u64) -> Instruction {
     Instruction {
         program_id: program_id(),
@@ -403,6 +470,16 @@ pub struct SessionMirror {
     pub reconciled: bool,
     pub tokens_claimed: bool,
     pub rakeback_claimed: bool,
+    pub bump: u8,
+}
+
+#[derive(borsh::BorshDeserialize, Debug)]
+pub struct TopUpMirror {
+    pub launch_id: u64,
+    pub trader: [u8; 32],
+    pub nonce: u64,
+    pub amount: u64,
+    pub applied: bool,
     pub bump: u8,
 }
 

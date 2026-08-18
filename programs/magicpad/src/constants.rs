@@ -1,6 +1,7 @@
 pub const PLATFORM_SEED: &[u8] = b"platform";
 pub const LAUNCH_SEED: &[u8] = b"launch";
 pub const SESSION_SEED: &[u8] = b"tsession";
+pub const TOPUP_SEED: &[u8] = b"topup";
 pub const RAKEBACK_SEED: &[u8] = b"rakeback";
 pub const MINT_SEED: &[u8] = b"mint"; // PDA mint per launch — derivable, no keypair to pass
 

@@ -39,6 +39,7 @@ const ROUTER = process.env.ROUTER_URL || 'https://devnet-router.magicblock.app';
 const POLL_MS = Number(process.env.POLL_MS || 15_000);
 const GRADUATION_LAMPORTS = new BN(5_000_000_000);
 const SESSION_DISC = Buffer.from(idl.accounts.find((a) => a.name === 'TradeSession').discriminator);
+const TOPUP_DISC = Buffer.from(idl.accounts.find((a) => a.name === 'TopUp').discriminator);
 const FROZEN = 1;
 const RECONCILED = 2;
 
@@ -62,6 +63,7 @@ const PLATFORM = pda(Buffer.from('platform'));
 const RAKEBACK = pda(Buffer.from('rakeback'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
+const sessionPda = (id, trader) => pda(Buffer.from('tsession'), le8(id), trader.toBuffer());
 const ata = (owner, mint) => PublicKey.findProgramAddressSync(
   [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()], ATA_PROGRAM)[0];
 
@@ -73,6 +75,10 @@ const decodeSession = (d) => program.coder.accounts.decode('tradeSession', d);
 
 const sessionFilters = (id) => [
   { memcmp: { offset: 0, bytes: bs58.encode(SESSION_DISC) } },
+  { memcmp: { offset: 8, bytes: bs58.encode(le8(id)) } },
+];
+const topupFilters = (id) => [
+  { memcmp: { offset: 0, bytes: bs58.encode(TOPUP_DISC) } },
   { memcmp: { offset: 8, bytes: bs58.encode(le8(id)) } },
 ];
 
@@ -142,9 +148,13 @@ async function tendDelegated(id, launch) {
   if (l.state < FROZEN) return; // live market — never touch it
 
   log(`launch ${id}: FROZEN in the ER, committing home`);
+  // top-up notes ride the same commit — commit_trade_sessions undelegates
+  // whatever delegated PDAs it's handed, sessions and notes alike
   const sessions = await er.getProgramAccounts(PROGRAM_ID, { filters: sessionFilters(id) });
-  for (let i = 0; i < sessions.length; i += 8) {
-    const batch = sessions.slice(i, i + 8);
+  const notes = await er.getProgramAccounts(PROGRAM_ID, { filters: topupFilters(id) });
+  const homebound = [...sessions, ...notes];
+  for (let i = 0; i < homebound.length; i += 8) {
+    const batch = homebound.slice(i, i + 8);
     await sendEr(er, [await program.methods.commitTradeSessions().accountsPartial({
       payer: keeper.publicKey, launch, magicProgram: MAGIC_PROGRAM, magicContext: MAGIC_CONTEXT,
     }).remainingAccounts(batch.map((s) => ({ pubkey: s.pubkey, isSigner: false, isWritable: true })))
@@ -167,6 +177,18 @@ async function tendHome(id, launch, l, adminKey) {
   // rare (opened mid-commit) — surface it, a later freeze pass can't help it
   const stragglers = await conn.getProgramAccounts(DLP, { filters: sessionFilters(id) });
   if (stragglers.length) log(`launch ${id}: ${stragglers.length} session(s) still delegated — stragglers`);
+
+  // top-up notes fold in BEFORE reconcile: an applied note's escrow joins
+  // its session PDA (reconcile refuses to fire until it has), an unapplied
+  // one refunds the trader in full. Notes still under the DLP retry next
+  // tick — the ordering error is clean by design.
+  const rawNotes = await conn.getProgramAccounts(PROGRAM_ID, { filters: topupFilters(id) });
+  for (const r of rawNotes) {
+    const n = program.coder.accounts.decode('topUp', r.account.data);
+    await sendL1([await program.methods.absorbTopUp().accountsPartial({
+      trader: n.trader, session: sessionPda(id, n.trader), note: r.pubkey,
+    }).instruction()], `absorb top-up ${sol(n.amount)} ${n.applied ? '→ session' : '→ refund'} ${n.trader.toBase58().slice(0, 8)}…`);
+  }
 
   // losers first (positive net funds the pot), winners after
   const unreconciled = sessions.filter((x) => !x.s.reconciled)

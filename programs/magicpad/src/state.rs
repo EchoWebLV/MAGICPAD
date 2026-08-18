@@ -41,6 +41,22 @@ pub const LAUNCH_GRADUATED: u8 = 3;
 #[derive(InitSpace)]
 pub struct RakebackPool {}
 
+// A top-up in flight: lamports escrowed on L1 in this note, then the note
+// delegates and the ER consumes it (deposit += amount, applied = true).
+// At settle, absorb merges applied notes into the session PDA — reconcile's
+// lamports >= rent + deposit check refuses to run until they all land —
+// and refunds unapplied ones in full. Nonce-seeded: any number in flight.
+#[account]
+#[derive(InitSpace)]
+pub struct TopUp {
+    pub launch_id: u64,
+    pub trader: Pubkey,
+    pub nonce: u64,
+    pub amount: u64,   // lamports escrowed in this PDA on L1
+    pub applied: bool, // flipped inside the ER when the deposit grew
+    pub bump: u8,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct TradeSession {

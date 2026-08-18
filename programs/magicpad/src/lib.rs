@@ -69,6 +69,28 @@ pub mod magicpad {
         delegate_trade_session_handler(ctx, launch_id)
     }
 
+    // -- escrow top-ups: the ceiling that grows mid-session --
+    pub fn top_up_session(
+        ctx: Context<TopUpSession>,
+        launch_id: u64,
+        nonce: u64,
+        amount: u64,
+    ) -> Result<()> {
+        top_up_session_handler(ctx, launch_id, nonce, amount)
+    }
+
+    pub fn delegate_top_up(ctx: Context<DelegateTopUp>, launch_id: u64, nonce: u64) -> Result<()> {
+        delegate_top_up_handler(ctx, launch_id, nonce)
+    }
+
+    pub fn apply_top_up(ctx: Context<ApplyTopUp>, nonce: u64) -> Result<()> {
+        apply_top_up_handler(ctx, nonce)
+    }
+
+    pub fn absorb_top_up(ctx: Context<AbsorbTopUp>) -> Result<()> {
+        absorb_top_up_handler(ctx)
+    }
+
     // -- the curve (ER, gasless, ledger-only) --
     pub fn buy(ctx: Context<TradeEr>, amount_in: u64) -> Result<()> {
         buy_handler(ctx, amount_in)
