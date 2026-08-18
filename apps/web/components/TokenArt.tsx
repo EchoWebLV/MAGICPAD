@@ -30,14 +30,15 @@ export default function TokenArt({ id, creator, symbol, size }: {
       />
     );
   }
-  const hue = (id * 137.5) % 360;
+  // no face yet: stay on palette and let the light angle carry the identity
+  const angle = (id * 137.5) % 360;
   return (
     <div
       className="tokenart blank"
       style={{
         ...px, fontSize: size * 0.42,
-        background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 40) % 360} 55% 12%))`,
-        color: `hsl(${hue} 70% 72%)`,
+        background: `linear-gradient(${angle}deg, rgba(255,199,0,0.18), rgba(255,199,0,0.02) 64%), #0d0d0c`,
+        color: 'rgba(255,199,0,0.8)',
       }}
     >
       {symbol.slice(0, 1)}

@@ -22,20 +22,23 @@ export default function CurveChart({ candles }: { candles: Candle[] }) {
       autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: '#8b93a3',
-        fontSize: 11,
+        textColor: '#5d5b55',
+        fontSize: 10,
       },
-      grid: { vertLines: { color: '#1d212b' }, horzLines: { color: '#1d212b' } },
-      rightPriceScale: { borderColor: '#1d212b' },
-      timeScale: { borderColor: '#1d212b', timeVisible: true, secondsVisible: false },
+      grid: { vertLines: { color: '#1a1a19' }, horzLines: { color: '#1a1a19' } },
+      rightPriceScale: { borderColor: '#222221' },
+      timeScale: {
+        borderColor: '#222221', timeVisible: true, secondsVisible: false,
+        barSpacing: 9, rightOffset: 6,
+      },
       crosshair: {
-        horzLine: { labelBackgroundColor: '#5b4fd4' },
-        vertLine: { labelBackgroundColor: '#5b4fd4' },
+        horzLine: { color: '#7a5d00', labelBackgroundColor: '#ffc700' },
+        vertLine: { color: '#7a5d00', labelBackgroundColor: '#ffc700' },
       },
     });
     const s = c.addSeries(CandlestickSeries, {
-      upColor: '#2fd67b', wickUpColor: '#2fd67b',
-      downColor: '#ff5c66', wickDownColor: '#ff5c66',
+      upColor: '#5fbf85', wickUpColor: '#5fbf85',
+      downColor: '#e75f47', wickDownColor: '#e75f47',
       borderVisible: false,
       priceFormat: {
         type: 'custom',
@@ -52,7 +55,15 @@ export default function CurveChart({ candles }: { candles: Candle[] }) {
   useEffect(() => {
     if (!series.current || candles.length === 0) return;
     series.current.setData(candles.map((k) => ({ ...k, time: k.time as UTCTimestamp })));
-    if (!didFit.current) { chart.current?.timeScale().fitContent(); didFit.current = true; }
+    // fitContent on a young market stretches two candles across the whole
+    // pane — a wall of colour. Below a screenful, keep the fixed bar spacing
+    // and just ride the right edge.
+    if (!didFit.current && candles.length > 40) {
+      chart.current?.timeScale().fitContent();
+      didFit.current = true;
+    } else if (!didFit.current) {
+      chart.current?.timeScale().scrollToRealTime();
+    }
   }, [candles]);
 
   return <div ref={box} style={{ width: '100%', height: 260 }} />;

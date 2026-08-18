@@ -46,7 +46,7 @@ export default function WalletPage() {
   const [qr, setQr] = useState<string | null>(null);
   useEffect(() => {
     if (!address) { setQr(null); return; }
-    QRCode.toDataURL(address, { width: 260, margin: 1, color: { dark: '#0a0b0e', light: '#ffffff' } })
+    QRCode.toDataURL(address, { width: 260, margin: 1, color: { dark: '#0a0a0a', light: '#f2f0e9' } })
       .then(setQr).catch(() => setQr(null));
   }, [address]);
 

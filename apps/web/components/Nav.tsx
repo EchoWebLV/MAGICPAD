@@ -40,11 +40,11 @@ export default function Nav() {
 
   return (
     <nav className="nav">
-      <Link href="/" className="brand">MAGIC<span>PAD</span></Link>
+      <Link href="/" className="brand"><i className="seal" />MagicPad</Link>
       <span className="tag">the launchpad that pays you to trade</span>
       <div className="grow" />
       {publicKey && bal !== null && (
-        <span className="pill mono"><span className="magic">◈</span> {fmtSol(bal, 3)}◎</span>
+        <span className="pill mono"><i className="dot" />{fmtSol(bal, 3)}◎</span>
       )}
       {/* fresh embedded wallets start empty — hand them devnet SOL in place */}
       {mounted && w.source === 'privy' && bal !== null && bal < 20_000_000 && (
@@ -56,7 +56,7 @@ export default function Nav() {
         <button className="btn" onClick={w.login} disabled={!w.privyReady}>Log in</button>
       )}
       {mounted && w.source === 'privy' && (
-        <span className="pill mono" title={publicKey?.toBase58()}>
+        <span className="pill mono who" title={publicKey?.toBase58()}>
           <Link href="/wallet" className="linkish">
             {w.who ?? short(publicKey?.toBase58() ?? '')}
           </Link>

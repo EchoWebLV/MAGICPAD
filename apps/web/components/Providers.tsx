@@ -40,7 +40,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <PrivyProvider
       appId={PRIVY_APP_ID}
       config={{
-        appearance: { theme: 'dark', accentColor: '#8b7cff' },
+        appearance: { theme: 'dark', accentColor: '#ffc700' },
         embeddedWallets: {
           solana: { createOnLogin: 'users-without-wallets' },
           showWalletUIs: false,

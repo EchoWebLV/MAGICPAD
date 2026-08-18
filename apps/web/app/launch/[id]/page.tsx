@@ -231,15 +231,15 @@ export default function LaunchPage() {
       <div className="trade-grid">
         <section>
           <div className="panel">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <TokenArt id={id} creator={l.creator} symbol={l.symbol} size={46} />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-                  <span style={{ fontWeight: 700, fontSize: 18 }}>{l.name}</span>
+            <div className="lhead">
+              <TokenArt id={id} creator={l.creator} symbol={l.symbol} size={52} />
+              <div className="lbody">
+                <div className="ltitle">
+                  <span className="lname">{l.name}</span>
                   <span className="mono magic">${l.symbol}</span>
                   {chip}
                   <a
-                    className="mono faint" style={{ marginLeft: 'auto', fontSize: 11 }} title={l.mint}
+                    className="mono faint lmint" title={l.mint}
                     href={`https://solscan.io/token/${l.mint}?cluster=devnet`} target="_blank" rel="noreferrer"
                   >
                     mint {short(l.mint)} ↗
@@ -306,7 +306,7 @@ export default function LaunchPage() {
             )}
           </div>
 
-          <div className="panel" style={{ marginTop: 12 }}>
+          <div className="panel gap">
             <h3>
               market cap chart{' '}
               <span className="faint">{solUsd ? `(USD, SOL at $${solUsd.toFixed(0)})` : '(SOL)'}</span>
@@ -314,7 +314,7 @@ export default function LaunchPage() {
             <CurveChart candles={candles} />
           </div>
 
-          <div className="panel" style={{ marginTop: 12 }}>
+          <div className="panel gap">
             <h3>bonding totals</h3>
             <div className="kv"><span className="k">buys / sells</span>
               <span className="mono"><span className="green">{stats.buys}</span> / <span className="red">{stats.sells}</span></span></div>
@@ -328,7 +328,7 @@ export default function LaunchPage() {
               <span className="mono">{fmtSol(stats.deposited)}◎{usd(stats.deposited)}</span></div>
           </div>
 
-          <div className="panel" style={{ marginTop: 12 }}>
+          <div className="panel gap">
             <h3>history <span className="faint">(deposits on L1, dark trades read from the rollup ledger)</span></h3>
             <div className="feed">
               {(!hist || hist.length === 0) && (
@@ -367,7 +367,7 @@ export default function LaunchPage() {
             </div>
           </div>
 
-          <div className="panel" style={{ marginTop: 12 }}>
+          <div className="panel gap">
             <h3>holders <span className="faint">(live session ledgers)</span></h3>
             <div className="feed">
               {(!holders || holders.length === 0) && (
@@ -457,7 +457,7 @@ export default function LaunchPage() {
 
           {pos && !pos.reconciled && tradable && (
             <>
-              <div className="panel" style={{ marginTop: 12 }}>
+              <div className="panel gap">
                 <h3>buy <span className="faint">gasless · zero fee</span></h3>
                 <div className="field">
                   <label>spend (SOL)</label>
@@ -501,7 +501,7 @@ export default function LaunchPage() {
                 )}
               </div>
 
-              <div className="panel" style={{ marginTop: 12 }}>
+              <div className="panel gap">
                 <h3>sell <span className="faint">gasless · zero fee</span></h3>
                 <div className="field">
                   <label>
@@ -535,14 +535,14 @@ export default function LaunchPage() {
           )}
 
           {(err || ok) && (
-            <div className="panel" style={{ marginTop: 12 }}>
+            <div className="panel gap">
               {ok && <p className="ok" style={{ margin: 0 }}>{ok}</p>}
               {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
             </div>
           )}
 
           {isCreator && meta === null && (
-            <div className="panel" style={{ marginTop: 12 }}>
+            <div className="panel gap">
               <h3>give this market a face</h3>
               <div className="imgpick">
                 <div className="drop" onClick={() => attachRef.current?.click()} title="pick an image">
@@ -567,7 +567,7 @@ export default function LaunchPage() {
           )}
 
           {others && others.length > 0 && (
-            <div className="panel" style={{ marginTop: 12 }}>
+            <div className="panel gap">
               <h3>more markets</h3>
               {others.slice(0, 5).map((o) => (
                 <Link key={o.id} href={`/launch/${o.id}`} className="kv">

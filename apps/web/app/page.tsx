@@ -45,10 +45,16 @@ function Row({ l }: { l: LaunchView }) {
   );
 }
 
-function Col({ title, hint, items }: { title: string; hint: string; items: LaunchView[] }) {
+function Col({ idx, title, hint, items }: {
+  idx: string; title: string; hint: string; items: LaunchView[];
+}) {
   return (
     <section className="col">
-      <h2>{title} <span className="count">{items.length}</span></h2>
+      <h2>
+        <span className="idx mono">{idx}</span>
+        {title}
+        <span className="count mono">{items.length}</span>
+      </h2>
       {items.length === 0 && <div className="empty">{hint}</div>}
       {items.map((l) => <Row key={l.id} l={l} />)}
     </section>
@@ -78,18 +84,47 @@ export default function Home() {
   // bonding, older than an hour, under the stretch line — still belongs on the board
   const lingering = bonding.filter((l) => !stretch.includes(l) && !fresh.includes(l));
   const migrated = all.filter((l) => l.state >= 1);
+  const raised = all.reduce((sum, l) => sum + l.realSolRaised, 0);
 
   return (
     <main className="wrap">
-      <div className="cols">
-        <Col title="New" hint={launches ? 'nothing bonding right now — launch something' : 'loading…'}
+      <header className="masthead">
+        <div>
+          <span className="eyebrow">Dark bonding</span>
+          <h1>Nothing<br />to <em>snipe.</em></h1>
+          <p className="lede">
+            Every market bonds inside a rollup. Trades cost no gas and pay no fee,
+            the mint holds zero supply until graduation, and losing hands you 10% back.
+          </p>
+        </div>
+        <div className="mh-stats">
+          <div className="stat">
+            <span className="k">markets</span>
+            <span className="v mono">{launches ? all.length : '—'}</span>
+          </div>
+          <div className="stat">
+            <span className="k">bonding now</span>
+            <span className="v mono">{launches ? bonding.length : '—'}</span>
+          </div>
+          <div className="stat">
+            <span className="k">raised</span>
+            <span className="v mono">{launches ? `${fmtSol(raised)}◎` : '—'}</span>
+          </div>
+          <div className="stat">
+            <span className="k">trading fee</span>
+            <span className="v mono y">zero</span>
+          </div>
+        </div>
+      </header>
+      <div className="board">
+        <Col idx="01" title="New" hint={launches ? 'nothing bonding right now' : 'loading'}
           items={[...fresh, ...lingering]} />
-        <Col title="Final Stretch" hint="no market past 60% of graduation yet" items={stretch} />
-        <Col title="Migrated" hint="graduations land here" items={migrated} />
+        <Col idx="02" title="Final Stretch" hint="no market past 60% of graduation yet" items={stretch} />
+        <Col idx="03" title="Migrated" hint="graduations land here" items={migrated} />
       </div>
-      <p className="note wrap" style={{ paddingBottom: 18 }}>
-        Bonding happens inside a MagicBlock Ephemeral Rollup: gasless trades on a session key,
-        zero supply on L1 until graduation, and losses pay 10% back. DARK means live and unsnipable.
+      <p className="note" style={{ margin: '22px 0 44px', maxWidth: '62ch' }}>
+        DARK means the market is live inside a MagicBlock Ephemeral Rollup. Trades run
+        on a session key, so there is no L1 trail to read and nothing to front-run.
       </p>
     </main>
   );
