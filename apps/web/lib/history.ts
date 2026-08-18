@@ -77,6 +77,7 @@ async function sweep(conn: Connection, id: number, er: boolean, c: Cache, seen: 
   const sigs = await conn.getSignaturesForAddress(launchPda(id), { limit: 40 }, 'confirmed');
   for (const s of [...sigs].reverse()) { // oldest first: deposits register session keys before their trades
     if (seen.has(s.signature)) continue;
+    if (s.err) { seen.add(s.signature); continue; } // failed txs never touched the curve
     const tx: any = await conn.getTransaction(s.signature, {
       maxSupportedTransactionVersion: 0, commitment: 'confirmed',
     });

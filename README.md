@@ -61,8 +61,15 @@ program and overlaid with their live ER state. Connect any wallet-standard
 wallet (Phantom, Solflare, Backpack). The wallet signs exactly twice in the
 whole product — launching a market and opening a session — and every trade
 after that is a gasless session-key transaction with no popup, with quote
-previews mirroring the on-chain curve. Dark markets have no public trade log
-by design, so the activity feed is implied from curve deltas.
+previews mirroring the on-chain curve. Dark markets have no public L1 trade
+log by design, but the terminal reconstructs full history anyway: deposits
+and settlement from L1, the trades themselves from the ER's own ledger, with
+session signers joined back to trader wallets. Replaying that history through
+the program's exact curve math drives a TradingView candlestick chart, the
+bonding totals, and a live holders table — no indexer anywhere.
+
+Set `NEXT_PUBLIC_RPC_URL` in `apps/web/.env.local` to a dedicated devnet RPC
+(Helius free tier works) — the public devnet endpoint rate-limits hard.
 
 ## Tests
 

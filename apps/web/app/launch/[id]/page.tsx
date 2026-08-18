@@ -5,14 +5,20 @@
  * trade log to scrape — the curve moving IS the only tell). Right: the
  * wallet's session — one approved deposit, then gasless ER buys/sells. */
 
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { PublicKey } from '@solana/web3.js';
+import CurveChart from '../../../components/CurveChart';
 import {
-  FIRST_WINDOW_MAX_BUY, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, STATE,
-  TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fmtSol, fmtTok, sellQuote, short,
+  FIRST_WINDOW_MAX_BUY, GRADUATION_LAMPORTS, LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
+  TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fetchLaunches, fmtSol, fmtTok, marketCapSol,
+  sellQuote, short,
 } from '../../../lib/magicpad';
 import { HistRow, fetchHistory } from '../../../lib/history';
+import { buildCandles, replayMcap } from '../../../lib/replay';
+import { getSolUsd } from '../../../lib/usd';
 import {
   PositionView, buyLive, ensureTradeSession, readLaunchLive, readPosition, sellLive,
 } from '../../../lib/trade-live';
@@ -45,6 +51,9 @@ export default function LaunchPage() {
   const [pos, setPos] = useState<PositionView | null>(null);
   const [bal, setBal] = useState<number | null>(null);
   const [hist, setHist] = useState<HistRow[] | null>(null);
+  const [holders, setHolders] = useState<{ trader: string; pos: PositionView }[] | null>(null);
+  const [solUsd, setSolUsd] = useState<number | null>(null);
+  const [others, setOthers] = useState<LaunchView[] | null>(null);
 
   const [depositIn, setDepositIn] = useState('0.05');
   const [buyIn, setBuyIn] = useState('0.01');
@@ -72,7 +81,17 @@ export default function LaunchPage() {
     if (r) setLive(toLive(r.l, r.dark));
     else if (r === null && live === null) setGone(true);
     setPos(p);
-    if (h) setHist(h);
+    if (h) {
+      setHist(h);
+      // holders = every wallet that ever opened a session, read live from the ER
+      const traders = [...new Set(h.filter((e) => e.kind === 'DEPOSIT').map((e) => e.actor))].slice(0, 20);
+      const rows = (await Promise.all(traders.map(async (t) => {
+        const tp = await readPosition(new PublicKey(t), id).catch(() => null);
+        return tp ? { trader: t, pos: tp } : null;
+      }))).filter(Boolean) as { trader: string; pos: PositionView }[];
+      rows.sort((x, y) => (y.pos.tokensHeld > x.pos.tokensHeld ? 1 : y.pos.tokensHeld < x.pos.tokensHeld ? -1 : 0));
+      setHolders(rows);
+    }
   }, [id, live, publicKey]);
 
   useEffect(() => {
@@ -81,13 +100,48 @@ export default function LaunchPage() {
     return () => clearInterval(t);
   }, [refresh]);
 
+  useEffect(() => {
+    let on = true;
+    const f = () => { getSolUsd().then((v) => { if (on) setSolUsd(v); }).catch(() => { /* garnish only */ }); };
+    f();
+    const t = setInterval(f, 60_000);
+    return () => { on = false; clearInterval(t); };
+  }, []);
+
+  useEffect(() => {
+    fetchLaunches().then((ls) => setOthers(ls.filter((x) => x.id !== id))).catch(() => { /* panel hides */ });
+  }, [id]);
+
+  const mcNow = live ? Number(live.virtualSol) * TOKEN_TOTAL_SUPPLY / Number(live.virtualTok) / LAMPORTS : 0;
+  const rep = useMemo(() => (hist ? replayMcap(hist) : null), [hist]);
+  const candles = useMemo(() => {
+    if (!rep || !live) return [];
+    const m = solUsd ?? 1;
+    return buildCandles(rep.pts, mcNow).map((k) => ({
+      time: k.time, open: k.open * m, high: k.high * m, low: k.low * m, close: k.close * m,
+    }));
+  }, [rep, live, solUsd, mcNow]);
+  const stats = useMemo(() => {
+    const s = { buys: 0, sells: 0, buyVol: 0, sellVol: 0, buyers: 0, sellers: 0, deposited: 0 };
+    if (!hist || !rep) return s;
+    const b = new Set<string>(); const sl = new Set<string>();
+    for (const e of hist) {
+      if (e.kind === 'BUY') { s.buys += 1; s.buyVol += e.sol ?? 0; b.add(e.actor); }
+      else if (e.kind === 'SELL') { s.sells += 1; s.sellVol += rep.solOfSig[e.sig] ?? 0; sl.add(e.actor); }
+      else if (e.kind === 'DEPOSIT') s.deposited += e.sol ?? 0;
+    }
+    s.buyers = b.size; s.sellers = sl.size;
+    return s;
+  }, [hist, rep]);
+  const usd = (lamports: number) => (solUsd ? ` ($${(lamports / LAMPORTS * solUsd).toFixed(2)})` : '');
+
   if (!Number.isInteger(id)) return <main className="wrap"><p className="empty">bad launch id</p></main>;
   if (gone && !live) return <main className="wrap"><p className="empty">no such market</p></main>;
   if (!live) return <main className="wrap"><p className="empty">loading market…</p></main>;
 
   const l = live;
   const pct = Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100);
-  const mc = Number(l.virtualSol) * TOKEN_TOTAL_SUPPLY / Number(l.virtualTok) / LAMPORTS;
+  const mc = mcNow;
   const spotPerTok = Number(l.virtualSol) / Number(l.virtualTok) * 10 ** TOKEN_DECIMALS; // lamports per display token
   const now = Math.floor(Date.now() / 1000);
   const inFirstWindow = l.state === 0 && now - l.createdTs < 60;
@@ -130,7 +184,10 @@ export default function LaunchPage() {
               </span>
             </div>
             <div className="kv" style={{ marginTop: 10 }}>
-              <span className="k">market cap</span><span className="mono">{mc.toFixed(2)}◎</span>
+              <span className="k">market cap</span>
+              <span className="mono">
+                {mc.toFixed(2)}◎{solUsd ? ` ($${Math.round(mc * solUsd).toLocaleString('en-US')})` : ''}
+              </span>
             </div>
             <div className="kv">
               <span className="k">spot</span>
@@ -143,6 +200,14 @@ export default function LaunchPage() {
             <div className="kv">
               <span className="k">bonding progress</span>
               <span className={`mono${pct >= 60 ? ' green' : ''}`}>{pct.toFixed(1)}%</span>
+            </div>
+            <div className="kv">
+              <span className="k">to graduate</span>
+              <span className="mono">
+                {l.realSolRaised >= GRADUATION_LAMPORTS
+                  ? 'ready'
+                  : `${fmtSol(GRADUATION_LAMPORTS - l.realSolRaised)}◎ more${usd(GRADUATION_LAMPORTS - l.realSolRaised)}`}
+              </span>
             </div>
             <div className="kv">
               <span className="k">tokens sold</span><span className="mono">{fmtTok(l.tokensSold)}</span>
@@ -165,6 +230,28 @@ export default function LaunchPage() {
                 first window: buys capped at {fmtSol(FIRST_WINDOW_MAX_BUY, 1)}◎ gross per session for the first 60s
               </p>
             )}
+          </div>
+
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3>
+              market cap chart{' '}
+              <span className="faint">{solUsd ? `(USD, SOL at $${solUsd.toFixed(0)})` : '(SOL)'}</span>
+            </h3>
+            <CurveChart candles={candles} />
+          </div>
+
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3>bonding totals</h3>
+            <div className="kv"><span className="k">buys / sells</span>
+              <span className="mono"><span className="green">{stats.buys}</span> / <span className="red">{stats.sells}</span></span></div>
+            <div className="kv"><span className="k">buy volume</span>
+              <span className="mono green">{fmtSol(stats.buyVol)}◎{usd(stats.buyVol)}</span></div>
+            <div className="kv"><span className="k">sell volume</span>
+              <span className="mono red">{fmtSol(stats.sellVol)}◎{usd(stats.sellVol)}</span></div>
+            <div className="kv"><span className="k">buyers / sellers</span>
+              <span className="mono">{stats.buyers} / {stats.sellers}</span></div>
+            <div className="kv"><span className="k">escrow deposited</span>
+              <span className="mono">{fmtSol(stats.deposited)}◎{usd(stats.deposited)}</span></div>
           </div>
 
           <div className="panel" style={{ marginTop: 12 }}>
@@ -193,6 +280,32 @@ export default function LaunchPage() {
                   </span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3>holders <span className="faint">(live session ledgers)</span></h3>
+            <div className="feed">
+              {(!holders || holders.length === 0) && (
+                <div className="empty" style={{ padding: 12 }}>no open sessions yet</div>
+              )}
+              {holders?.map((row) => {
+                const hn = row.pos.solProceeds - row.pos.solSpent;
+                const supPct = Number(row.pos.tokensHeld) / TOKEN_TOTAL_SUPPLY * 100;
+                const you = publicKey?.toBase58() === row.trader;
+                return (
+                  <div className="t mono" key={row.trader}>
+                    <span className={you ? 'magic' : ''} title={row.trader}>
+                      {short(row.trader)}{you ? ' (you)' : ''}
+                    </span>
+                    <span>{fmtTok(row.pos.tokensHeld)} {l.symbol}</span>
+                    <span className="faint">{supPct.toFixed(2)}% supply</span>
+                    <span className={hn > 0 ? 'green' : hn < 0 ? 'red' : 'dim'} style={{ marginLeft: 'auto' }}>
+                      {hn >= 0 ? '+' : '−'}{fmtSol(Math.abs(hn), 4)}◎
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </section>
@@ -264,6 +377,12 @@ export default function LaunchPage() {
                   <label>spend (SOL)</label>
                   <input value={buyIn} onChange={(e) => setBuyIn(e.target.value)} inputMode="decimal" />
                 </div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  {['0.1', '0.5', '1'].map((v) => (
+                    <button key={v} className="btn ghost" style={{ flex: 1, padding: '4px 0', fontSize: 11 }}
+                      onClick={() => setBuyIn(v)}>{v}◎</button>
+                  ))}
+                </div>
                 <div className="kv"><span className="k">you get</span>
                   <span className="mono green">{fmtTok(buyOut)} {l.symbol}</span></div>
                 <button
@@ -288,6 +407,14 @@ export default function LaunchPage() {
                   </label>
                   <input value={sellIn} onChange={(e) => setSellIn(e.target.value)} inputMode="decimal" />
                 </div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  {[25, 50, 100].map((f) => (
+                    <button key={f} className="btn ghost" style={{ flex: 1, padding: '4px 0', fontSize: 11 }}
+                      onClick={() => setSellIn((Number(pos.tokensHeld) * f / 100 / 10 ** TOKEN_DECIMALS).toFixed(6))}>
+                      {f}%
+                    </button>
+                  ))}
+                </div>
                 <div className="kv"><span className="k">you get</span>
                   <span className="mono red">{fmtSol(Number(sellOut), 4)}◎</span></div>
                 <button
@@ -305,6 +432,18 @@ export default function LaunchPage() {
             <div className="panel" style={{ marginTop: 12 }}>
               {ok && <p className="ok" style={{ margin: 0 }}>{ok}</p>}
               {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
+            </div>
+          )}
+
+          {others && others.length > 0 && (
+            <div className="panel" style={{ marginTop: 12 }}>
+              <h3>more markets</h3>
+              {others.slice(0, 5).map((o) => (
+                <Link key={o.id} href={`/launch/${o.id}`} className="kv">
+                  <span className="k">{o.name} <span className="mono faint">${o.symbol}</span></span>
+                  <span className="mono">{marketCapSol(o).toFixed(1)}◎</span>
+                </Link>
+              ))}
             </div>
           )}
         </section>
