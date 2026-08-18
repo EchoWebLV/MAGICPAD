@@ -66,6 +66,7 @@ export default function Create() {
       await sendWithWallet(wallet, tx);
       router.push(`/launch/${id}`);
     } catch (e: any) {
+      setMsg('');
       setErr(String(e?.message ?? e));
       setBusy(false);
     }
