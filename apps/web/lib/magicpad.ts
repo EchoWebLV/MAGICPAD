@@ -25,6 +25,10 @@ export const TOKEN_DECIMALS = 6;
 export const TOKEN_TOTAL_SUPPLY = 1_000_000_000_000_000; // raw units
 export const FIRST_WINDOW_MAX_BUY = 0.5 * LAMPORTS;
 export const MIN_DEPOSIT = 0.01 * LAMPORTS;
+// launch-time virtual reserves, from programs/magicpad/src/constants.rs —
+// a launch-tx dev buy quotes against EXACTLY these, so its fill is exact
+export const VIRTUAL_SOL_INIT = 30_000_000_000n;
+export const VIRTUAL_TOK_INIT = 1_073_000_000_000_000n;
 
 export const connection = new Connection(RPC_URL, {
   commitment: 'confirmed', disableRetryOnRateLimit: true,

@@ -42,11 +42,15 @@ function load(id: number): Cache {
   return { events: [], sk: {}, seen: [] };
 }
 
-function parseTx(tx: any, sig: string, er: boolean, c: Cache): HistEvent | null {
+/** ALL activity in one tx — a buy-and-deploy creation carries LAUNCH,
+ *  DEPOSIT, and BUY in a single signature, and the deposit leg must still
+ *  register its session key or ER trades render as raw throwaway keys. */
+function parseTx(tx: any, sig: string, er: boolean, c: Cache): HistEvent[] {
   const msg = tx.transaction.message;
   const keys: PublicKey[] = msg.staticAccountKeys ?? msg.accountKeys;
   const signer = keys[0].toBase58();
   const at = (tx.blockTime ?? 0) * 1000;
+  const out: HistEvent[] = [];
   for (const ix of msg.compiledInstructions ?? msg.instructions ?? []) {
     const pid = keys[ix.programIdIndex];
     if (!pid || !pid.equals(PROGRAM_ID)) continue;
@@ -56,22 +60,22 @@ function parseTx(tx: any, sig: string, er: boolean, c: Cache): HistEvent | null 
     if (!dec) continue;
     const a: any = dec.data;
     switch (dec.name) {
-      case 'create_launch': return { sig, at, er, kind: 'LAUNCH', signer, sol: 1_000_000_000 };
+      case 'create_launch': out.push({ sig, at, er, kind: 'LAUNCH', signer, sol: 1_000_000_000 }); break;
       case 'open_trade_session':
         c.sk[a.session_key.toBase58()] = signer;
-        return { sig, at, er, kind: 'DEPOSIT', signer, sol: bnNum(a.deposit) };
-      case 'top_up_session': return { sig, at, er, kind: 'TOPUP', signer, sol: bnNum(a.amount) };
-      case 'buy': return { sig, at, er, kind: 'BUY', signer, sol: bnNum(a.amount_in) };
-      case 'sell': return { sig, at, er, kind: 'SELL', signer, tok: bnNum(a.tokens_in) };
-      case 'freeze_launch': return { sig, at, er, kind: 'FREEZE', signer };
-      case 'reconcile_trade_session': return { sig, at, er, kind: 'SETTLED', signer };
-      case 'claim_tokens': return { sig, at, er, kind: 'CLAIM', signer };
-      case 'claim_rakeback': return { sig, at, er, kind: 'RAKEBACK', signer };
-      case 'graduate': return { sig, at, er, kind: 'GRADUATED', signer };
-      default: continue; // delegate_* / commit_* are plumbing, not activity
+        out.push({ sig, at, er, kind: 'DEPOSIT', signer, sol: bnNum(a.deposit) }); break;
+      case 'top_up_session': out.push({ sig, at, er, kind: 'TOPUP', signer, sol: bnNum(a.amount) }); break;
+      case 'buy': out.push({ sig, at, er, kind: 'BUY', signer, sol: bnNum(a.amount_in) }); break;
+      case 'sell': out.push({ sig, at, er, kind: 'SELL', signer, tok: bnNum(a.tokens_in) }); break;
+      case 'freeze_launch': out.push({ sig, at, er, kind: 'FREEZE', signer }); break;
+      case 'reconcile_trade_session': out.push({ sig, at, er, kind: 'SETTLED', signer }); break;
+      case 'claim_tokens': out.push({ sig, at, er, kind: 'CLAIM', signer }); break;
+      case 'claim_rakeback': out.push({ sig, at, er, kind: 'RAKEBACK', signer }); break;
+      case 'graduate': out.push({ sig, at, er, kind: 'GRADUATED', signer }); break;
+      default: break; // delegate_* / commit_* are plumbing, not activity
     }
   }
-  return null;
+  return out;
 }
 
 async function sweep(conn: Connection, id: number, er: boolean, c: Cache, seen: Set<string>, gapMs: number) {
@@ -84,8 +88,9 @@ async function sweep(conn: Connection, id: number, er: boolean, c: Cache, seen: 
     });
     if (!tx) continue; // not indexed yet — next poll
     seen.add(s.signature);
-    const ev = parseTx(tx, s.signature, er, c);
-    if (ev && !c.events.some((e) => e.sig === ev.sig)) c.events.push(ev);
+    for (const ev of parseTx(tx, s.signature, er, c)) {
+      if (!c.events.some((e) => e.sig === ev.sig && e.kind === ev.kind)) c.events.push(ev);
+    }
     if (gapMs) await new Promise((r) => setTimeout(r, gapMs));
   }
 }

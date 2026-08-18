@@ -163,6 +163,18 @@ async function sessionSigner(wallet: WalletLike, id: number): Promise<Keypair> {
   return settle(next);
 }
 
+/** Session key for a launch that is being created right now — resolved
+ *  BEFORE the launch exists, so the creator's first buy can ride the
+ *  creation tx itself. Seeds the signer memo so post-launch trading picks
+ *  up the exact same keypair without another wallet signature. */
+export async function launchSessionKey(wallet: WalletLike, id: number): Promise<Keypair> {
+  const trader = wallet.publicKey;
+  if (!trader) throw new Error('connect a wallet first');
+  const k = await freshKeyFor(wallet, id);
+  signerMemo.set(memoKeyOf(id, trader), k);
+  return k;
+}
+
 const delegationMetas = (target: PublicKey, suffix: string) => {
   const [buf] = PublicKey.findProgramAddressSync([Buffer.from('buffer'), target.toBuffer()], PROGRAM_ID);
   const [rec] = PublicKey.findProgramAddressSync([Buffer.from('delegation'), target.toBuffer()], DLP);

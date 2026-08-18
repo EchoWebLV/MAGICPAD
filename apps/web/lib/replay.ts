@@ -6,12 +6,11 @@
  * every trade — a real chart with no indexer. Mirrors trade.rs:
  * buy: vs += in, vt -= out. sell: vs -= out, vt += tokens_in. */
 
-import { LAMPORTS, TOKEN_TOTAL_SUPPLY, buyQuote, sellQuote } from './magicpad';
+import {
+  LAMPORTS, TOKEN_TOTAL_SUPPLY, VIRTUAL_SOL_INIT as VS0, VIRTUAL_TOK_INIT as VT0,
+  buyQuote, sellQuote,
+} from './magicpad';
 import { HistEvent } from './history';
-
-// launch-time reserves, from programs/magicpad/src/constants.rs
-const VS0 = 30_000_000_000n;
-const VT0 = 1_073_000_000_000_000n;
 
 export interface PricePoint { at: number; mcapSol: number } // at in ms
 export interface ReplayOut {

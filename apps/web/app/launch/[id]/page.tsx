@@ -340,7 +340,7 @@ export default function LaunchPage() {
                 </div>
               )}
               {hist?.map((e) => (
-                <div className="t mono" key={e.sig}>
+                <div className="t mono" key={`${e.sig}:${e.kind}`}>
                   <span className={e.kind === 'BUY' ? 'green' : e.kind === 'SELL' ? 'red' : e.kind === 'DEPOSIT' || e.kind === 'TOPUP' ? 'magic' : 'faint'}>
                     {e.kind === 'TOPUP' ? 'TOP-UP' : e.kind}
                   </span>

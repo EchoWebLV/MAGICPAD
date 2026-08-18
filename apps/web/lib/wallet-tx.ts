@@ -4,7 +4,7 @@
  * product ever pop the wallet: create_launch and the session deposit.
  * Everything after rides the local session key, gasless, no popups. */
 
-import { Connection, PublicKey, Transaction, TransactionSignature } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, Transaction, TransactionSignature } from '@solana/web3.js';
 import { connection } from './magicpad';
 
 export interface WalletLike {
@@ -23,13 +23,19 @@ export function notifyActivity(): void {
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('magicpad:activity'));
 }
 
-export async function sendWithWallet(wallet: WalletLike, tx: Transaction): Promise<string> {
+export async function sendWithWallet(
+  wallet: WalletLike, tx: Transaction, extraSigners: Keypair[] = [],
+): Promise<string> {
   if (!wallet.publicKey) throw new Error('connect a wallet first');
   // pin the blockhash ourselves so the confirm window is the one the tx
   // actually carries, not whatever the adapter happened to fetch
   const bh = await connection.getLatestBlockhash('confirmed');
   tx.feePayer = wallet.publicKey;
   tx.recentBlockhash = bh.blockhash;
+  // partial signatures go on AFTER the message is pinned (they sign it);
+  // both wallet rails preserve them — Privy serializes and signs on top,
+  // adapters partial-sign the same tx object
+  if (extraSigners.length) tx.partialSign(...extraSigners);
   const sig = await wallet.sendTransaction(tx, connection, { maxRetries: 3 });
   try {
     const res = await connection.confirmTransaction({ signature: sig, ...bh }, 'confirmed');

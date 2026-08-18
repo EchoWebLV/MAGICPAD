@@ -1,31 +1,43 @@
 'use client';
 
-/* Launch form. Image + metadata pin to IPFS first (through our API route —
- * the Pinata key stays server-side), then one wallet approval does all
- * three: create_launch (1 SOL fee, PDA mint born at supply zero),
- * delegate_launch (the market goes dark in the ER before the first trade
- * exists), and a memo carrying the metadata CID — the chain is the only
- * registry there is. */
+/* Launch form, pump-style buy-and-deploy. Image + metadata pin to IPFS
+ * first (through our API route — the Pinata key stays server-side), then
+ * ONE wallet approval does everything, atomically:
+ *
+ *   create_launch (1 SOL fee) → open_trade_session (escrow the first buy)
+ *   → buy (L1, while the launch is still program-owned for two more
+ *   instructions) → delegate_launch → delegate_trade_session → CID memo.
+ *
+ * The market goes dark WITH the creator's position already on the curve —
+ * nothing tradeable ever exists on L1, and the creator's fill is exact
+ * because they are the first buy by construction. Skipping the buy sends
+ * the classic three-instruction launch instead. */
 
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BN } from '@coral-xyz/anchor';
 import { useActiveWallet } from '../../lib/use-active-wallet';
-import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import {
-  DLP, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, fmtSol, launchPda, mintPda, program,
+  DLP, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT,
+  buyQuote, fmtSol, fmtTok, launchPda, mintPda, program, sessionPda,
 } from '../../lib/magicpad';
 import { metaMemoIx, pinAssets, squashImage } from '../../lib/metadata';
+import { launchSessionKey } from '../../lib/trade-live';
 import { requestAirdrop, sendWithWallet, walletBalance } from '../../lib/wallet-tx';
 
 const FEE = 1_000_000_000;
+const DEV_BUY_MAX = 0.5;   // FIRST_WINDOW_MAX_BUY — the anti-snipe cap binds the creator too
+const DEV_BUY_MIN = 0.01;  // MIN_DEPOSIT — the escrow floor
 
-const delegationMetas = (target: PublicKey) => {
+const delegationMetas = (target: PublicKey, suffix: string) => {
   const [buf] = PublicKey.findProgramAddressSync([Buffer.from('buffer'), target.toBuffer()], PROGRAM_ID);
   const [rec] = PublicKey.findProgramAddressSync([Buffer.from('delegation'), target.toBuffer()], DLP);
   const [meta] = PublicKey.findProgramAddressSync([Buffer.from('delegation-metadata'), target.toBuffer()], DLP);
   return {
-    bufferLaunch: buf, delegationRecordLaunch: rec, delegationMetadataLaunch: meta,
+    [`buffer${suffix}`]: buf,
+    [`delegationRecord${suffix}`]: rec,
+    [`delegationMetadata${suffix}`]: meta,
     ownerProgram: PROGRAM_ID, delegationProgram: DLP, systemProgram: SystemProgram.programId,
   };
 };
@@ -42,6 +54,7 @@ export default function Create() {
   const [website, setWebsite] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [preview, setPreview] = useState('');
+  const [devBuy, setDevBuy] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const [bal, setBal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -55,9 +68,17 @@ export default function Create() {
   useEffect(() => { refreshBal(); }, [refreshBal]);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
-  const canAfford = bal !== null && bal >= FEE + 0.01 * 1e9;
+  const dv = devBuy.trim() === '' ? 0 : Number(devBuy);
+  const devOk = dv === 0 || (Number.isFinite(dv) && dv >= DEV_BUY_MIN && dv <= DEV_BUY_MAX);
+  const devLamports = devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
+  // the creator is the first buy by construction — this quote IS the fill
+  const alloc = devLamports > 0
+    ? buyQuote(VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, BigInt(devLamports)) : 0n;
+  const allocPct = Number(alloc) / 1e13; // of 1e15 raw total supply, in %
+
+  const canAfford = bal !== null && bal >= FEE + devLamports + 0.02 * 1e9;
   const valid = name.length > 0 && name.length <= 32
-    && symbol.length > 0 && symbol.length <= 10 && image !== null;
+    && symbol.length > 0 && symbol.length <= 10 && image !== null && devOk;
 
   function pickImage(f: File | undefined) {
     if (!f) return;
@@ -86,14 +107,42 @@ export default function Create() {
           creator: publicKey, platform: PLATFORM, launch, mint: mintPda(id),
           tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
         }).instruction(),
-        await program.methods.delegateLaunch(new BN(id)).accountsPartial({
-          payer: publicKey, platform: PLATFORM, launch, ...delegationMetas(launch),
-        }).instruction(),
-        // the CID rides the creation tx — resolvable forever from the PDA's history
-        metaMemoIx(cid),
       );
+      const signers: Keypair[] = [];
+      if (devLamports > 0) {
+        // buy-and-deploy: escrow + first buy land BEFORE delegation flips
+        // the accounts dark — the ER clones a curve that already moved
+        setMsg('deriving your trade key…');
+        const sk = await launchSessionKey(wallet, id);
+        signers.push(sk);
+        const session = sessionPda(id, publicKey);
+        tx.add(
+          await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(devLamports)).accountsPartial({
+            trader: publicKey, session, launch, systemProgram: SystemProgram.programId,
+          }).instruction(),
+          await program.methods.buy(new BN(devLamports)).accountsPartial({
+            sessionSigner: sk.publicKey, session, launch,
+          }).instruction(),
+        );
+        tx.add(
+          await program.methods.delegateLaunch(new BN(id)).accountsPartial({
+            payer: publicKey, platform: PLATFORM, launch, ...delegationMetas(launch, 'Launch'),
+          }).instruction(),
+          await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
+            payer: publicKey, session, ...delegationMetas(session, 'Session'),
+          }).instruction(),
+        );
+      } else {
+        tx.add(
+          await program.methods.delegateLaunch(new BN(id)).accountsPartial({
+            payer: publicKey, platform: PLATFORM, launch, ...delegationMetas(launch, 'Launch'),
+          }).instruction(),
+        );
+      }
+      // the CID rides the creation tx — resolvable forever from the PDA's history
+      tx.add(metaMemoIx(cid));
       setMsg('waiting for your wallet…');
-      await sendWithWallet(wallet, tx);
+      await sendWithWallet(wallet, tx, signers);
       router.push(`/launch/${id}`);
     } catch (e: any) {
       setMsg('');
@@ -136,6 +185,26 @@ export default function Create() {
           <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="MIDNIGHT" maxLength={10} />
         </div>
         <div className="field">
+          <label>your first buy (optional, ◎)</label>
+          <input
+            value={devBuy} onChange={(e) => setDevBuy(e.target.value)}
+            placeholder="0.0" inputMode="decimal"
+          />
+          {devLamports > 0 && (
+            <p className="note" style={{ marginTop: 6 }}>
+              you are the first buy, so this fill is exact:{' '}
+              <span className="mono green">{fmtTok(alloc)} {symbol.trim().toUpperCase() || 'tokens'}</span>
+              {' '}({allocPct.toFixed(2)}% of supply) — held in your session, tradeable instantly
+            </p>
+          )}
+          {!devOk && (
+            <p className="note" style={{ marginTop: 6 }}>
+              between {DEV_BUY_MIN}◎ and {DEV_BUY_MAX}◎ — the first-minute anti-snipe
+              cap is 0.5◎ per wallet and it applies to you too
+            </p>
+          )}
+        </div>
+        <div className="field">
           <label>description (optional)</label>
           <textarea
             value={description} onChange={(e) => setDescription(e.target.value)}
@@ -154,13 +223,16 @@ export default function Create() {
           />
         </div>
         <div className="kv"><span className="k">launch fee</span><span className="mono">1.000◎</span></div>
+        {devLamports > 0 && (
+          <div className="kv"><span className="k">your first buy</span><span className="mono">{fmtSol(devLamports)}◎</span></div>
+        )}
         <div className="kv"><span className="k">trading fees</span><span className="mono green">zero</span></div>
         <div className="kv"><span className="k">loss rakeback</span><span className="mono green">10%</span></div>
         <div className="kv"><span className="k">wallet balance</span>
           <span className="mono">{!publicKey ? 'not connected' : bal === null ? '…' : `${fmtSol(bal)}◎`}</span></div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button className="btn" disabled={busy || !publicKey || !valid || !canAfford} onClick={submit}>
-            Launch dark · 1◎
+            {devLamports > 0 ? `Launch + buy · ${fmtSol(FEE + devLamports)}◎` : 'Launch dark · 1◎'}
           </button>
           {publicKey && !canAfford && (
             <button className="btn ghost" disabled={busy} onClick={airdrop}>Airdrop 1◎</button>
@@ -173,11 +245,14 @@ export default function Create() {
           <p className="note">pick an image — markets without a face don&apos;t get traded</p>
         )}
         {publicKey && !canAfford && bal !== null && (
-          <p className="note">the fee is 1◎ + dust — airdrop devnet SOL or top the wallet up</p>
+          <p className="note">
+            you need {fmtSol(FEE + devLamports)}◎ + dust — airdrop devnet SOL or top the wallet up
+          </p>
         )}
         <p className="note">
-          The token mint exists from second zero with zero supply. All bonding happens dark
-          inside the Ephemeral Rollup — no L1 trail to snipe, no gas to pay.
+          One transaction does all of it: the market is born, your buy lands on the
+          curve, and everything goes dark in the Ephemeral Rollup — your position
+          exists before anyone can even see the token.
         </p>
         {msg && <p className="ok">{msg}</p>}
         {err && <p className="err">{err}</p>}
