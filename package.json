@@ -1,0 +1,18 @@
+{
+  "name": "magicpad",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.12.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "demo": "node scripts/demo-trader.mjs",
+    "keeper": "node scripts/keeper.mjs"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.98.4"
+  }
+}
