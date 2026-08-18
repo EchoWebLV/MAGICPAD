@@ -122,7 +122,7 @@ let memo: { at: number; data: LaunchView[] } | null = null;
 let inflight: Promise<LaunchView[]> | null = null;
 
 export async function fetchLaunches(): Promise<LaunchView[]> {
-  if (memo && Date.now() - memo.at < 2500) return memo.data;
+  if (memo && Date.now() - memo.at < 6000) return memo.data;
   if (inflight) return inflight;
   inflight = (async () => {
     const [home, dark] = await Promise.all([
@@ -159,9 +159,12 @@ export async function fetchLaunches(): Promise<LaunchView[]> {
     memo = { at: Date.now(), data: views };
     return views;
   })();
-  // clear the latch on settle either way — a failed sweep must not wedge the board
-  inflight.finally(() => { inflight = null; });
-  return inflight;
+  // clear the latch on settle either way — a failed sweep must not wedge the
+  // board. The finally-derived promise re-throws the rejection, so absorb it:
+  // callers handle the ORIGINAL promise; the derived one is bookkeeping only.
+  const p = inflight;
+  p.finally(() => { if (inflight === p) inflight = null; }).catch(() => { /* observed via p */ });
+  return p;
 }
 
 // ---- curve math, mirrored from curve.rs (BigInt, trader-adverse +1) --------

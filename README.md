@@ -57,11 +57,12 @@ pnpm --filter @magicpad/web dev    # http://localhost:3020
 
 Three columns — New, Final Stretch, Migrated — over a dual sweep: home
 launches read from the program, dark launches discovered under the delegation
-program and overlaid with their live ER state. The terminal page trades the
-real rail from a localStorage burner: one deposit transaction, then gasless
-buys and sells against the ER with quote previews mirroring the on-chain
-curve. Dark markets have no public trade log by design, so the activity feed
-is implied from curve deltas.
+program and overlaid with their live ER state. Connect any wallet-standard
+wallet (Phantom, Solflare, Backpack). The wallet signs exactly twice in the
+whole product — launching a market and opening a session — and every trade
+after that is a gasless session-key transaction with no popup, with quote
+previews mirroring the on-chain curve. Dark markets have no public trade log
+by design, so the activity feed is implied from curve deltas.
 
 ## Tests
 

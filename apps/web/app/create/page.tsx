@@ -1,17 +1,18 @@
 'use client';
 
-/* Launch form. One transaction does both: create_launch (1 SOL fee, PDA
- * mint born at supply zero) and delegate_launch (the market goes dark in
- * the ER before the first trade exists). */
+/* Launch form. One wallet approval does both: create_launch (1 SOL fee,
+ * PDA mint born at supply zero) and delegate_launch (the market goes dark
+ * in the ER before the first trade exists). */
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BN } from '@coral-xyz/anchor';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import {
   DLP, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, fmtSol, launchPda, mintPda, program,
 } from '../../lib/magicpad';
-import { burnerBalance, getBurner, requestAirdrop, sendWithBurner } from '../../lib/burner';
+import { requestAirdrop, sendWithWallet, walletBalance } from '../../lib/wallet-tx';
 
 const FEE = 1_000_000_000;
 
@@ -27,6 +28,8 @@ const delegationMetas = (target: PublicKey) => {
 
 export default function Create() {
   const router = useRouter();
+  const wallet = useWallet();
+  const { publicKey } = wallet;
   const [name, setName] = useState('');
   const [symbol, setSymbol] = useState('');
   const [bal, setBal] = useState<number | null>(null);
@@ -34,30 +37,33 @@ export default function Create() {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
 
-  const refreshBal = () => burnerBalance().then(setBal).catch(() => { /* next call */ });
-  useEffect(() => { refreshBal(); }, []);
+  const refreshBal = useCallback(() => {
+    if (!publicKey) { setBal(null); return; }
+    walletBalance(publicKey).then(setBal).catch(() => { /* next call */ });
+  }, [publicKey]);
+  useEffect(() => { refreshBal(); }, [refreshBal]);
 
   const canAfford = bal !== null && bal >= FEE + 0.01 * 1e9;
   const valid = name.length > 0 && name.length <= 32 && symbol.length > 0 && symbol.length <= 10;
 
   async function submit() {
+    if (!publicKey) return;
     setErr(''); setMsg(''); setBusy(true);
     try {
-      const burner = getBurner();
       const platform = await (program.account as any).platform.fetch(PLATFORM);
       const id = platform.launchSeq.toNumber();
       const launch = launchPda(id);
       const tx = new Transaction().add(
         await program.methods.createLaunch(name.trim(), symbol.trim().toUpperCase()).accountsPartial({
-          creator: burner.publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+          creator: publicKey, platform: PLATFORM, launch, mint: mintPda(id),
           tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
         }).instruction(),
         await program.methods.delegateLaunch(new BN(id)).accountsPartial({
-          payer: burner.publicKey, platform: PLATFORM, launch, ...delegationMetas(launch),
+          payer: publicKey, platform: PLATFORM, launch, ...delegationMetas(launch),
         }).instruction(),
       );
-      setMsg('launching dark…');
-      await sendWithBurner(tx);
+      setMsg('waiting for your wallet…');
+      await sendWithWallet(wallet, tx);
       router.push(`/launch/${id}`);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -66,8 +72,9 @@ export default function Create() {
   }
 
   async function airdrop() {
+    if (!publicKey) return;
     setErr(''); setMsg('requesting devnet airdrop…'); setBusy(true);
-    try { await requestAirdrop(); setMsg('airdrop landed'); await refreshBal(); }
+    try { await requestAirdrop(publicKey); setMsg('airdrop landed'); refreshBal(); }
     catch (e: any) { setErr(`airdrop failed (devnet faucet limits): ${String(e?.message ?? e)}`); }
     setBusy(false);
   }
@@ -87,18 +94,21 @@ export default function Create() {
         <div className="kv"><span className="k">launch fee</span><span className="mono">1.000◎</span></div>
         <div className="kv"><span className="k">trading fees</span><span className="mono green">zero</span></div>
         <div className="kv"><span className="k">loss rakeback</span><span className="mono green">10%</span></div>
-        <div className="kv"><span className="k">burner balance</span>
-          <span className="mono">{bal === null ? '…' : `${fmtSol(bal)}◎`}</span></div>
+        <div className="kv"><span className="k">wallet balance</span>
+          <span className="mono">{!publicKey ? 'not connected' : bal === null ? '…' : `${fmtSol(bal)}◎`}</span></div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <button className="btn" disabled={busy || !valid || !canAfford} onClick={submit}>
+          <button className="btn" disabled={busy || !publicKey || !valid || !canAfford} onClick={submit}>
             Launch dark · 1◎
           </button>
-          {!canAfford && (
+          {publicKey && !canAfford && (
             <button className="btn ghost" disabled={busy} onClick={airdrop}>Airdrop 1◎</button>
           )}
         </div>
-        {!canAfford && bal !== null && (
-          <p className="note">the burner needs 1◎ + dust for the fee — airdrop or send devnet SOL to the address in the top bar</p>
+        {!publicKey && (
+          <p className="note">connect your wallet (top right) to launch — this is devnet, any wallet works</p>
+        )}
+        {publicKey && !canAfford && bal !== null && (
+          <p className="note">the fee is 1◎ + dust — airdrop devnet SOL or top the wallet up</p>
         )}
         <p className="note">
           The token mint exists from second zero with zero supply. All bonding happens dark

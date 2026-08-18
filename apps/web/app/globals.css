@@ -125,6 +125,32 @@ input { font: inherit; }
 .feed { max-height: 300px; overflow-y: auto; }
 .feed .t { display: flex; gap: 10px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 
+/* ---- wallet adapter, retinted to the house theme ---- */
+.wallet-adapter-button {
+  height: auto; line-height: normal;
+  font-family: var(--font-ui), system-ui, sans-serif; font-size: 13px; font-weight: 500;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px;
+}
+.wallet-adapter-button:not([disabled]):hover { background: var(--panel2); }
+.wallet-adapter-button-start-icon { width: 16px; height: 16px; }
+.wallet-adapter-dropdown-list {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+  font-family: var(--font-ui), system-ui, sans-serif;
+}
+.wallet-adapter-dropdown-list-item { font-size: 13px; border-radius: 8px; }
+.wallet-adapter-dropdown-list-item:not([disabled]):hover { background: var(--panel); }
+.wallet-adapter-modal-wrapper {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  font-family: var(--font-ui), system-ui, sans-serif;
+}
+.wallet-adapter-modal-overlay { background: rgba(6, 7, 10, 0.75); }
+.wallet-adapter-modal-title { color: var(--text); font-size: 17px; }
+.wallet-adapter-modal-list .wallet-adapter-button { border: none; background: transparent; }
+.wallet-adapter-modal-list .wallet-adapter-button:not([disabled]):hover { background: var(--panel2); }
+.wallet-adapter-modal-list-more { color: var(--dim); }
+.wallet-adapter-modal-button-close { background: var(--panel2); }
+
 @media (max-width: 900px) {
   .cols { grid-template-columns: 1fr; }
   .col { min-height: unset; }

@@ -58,7 +58,9 @@ export default function Home() {
       try { const data = await fetchLaunches(); if (live) setLaunches(data); } catch { /* next tick */ }
     };
     tick();
-    const t = setInterval(tick, 4000);
+    // the board reads L1 (two GPA sweeps per refresh) — stay polite to
+    // public devnet; the terminal page is where live-feel matters, on the ER
+    const t = setInterval(tick, 8000);
     return () => { live = false; clearInterval(t); };
   }, []);
 

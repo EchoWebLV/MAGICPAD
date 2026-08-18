@@ -3,10 +3,11 @@
 /* The terminal for one market. Left: live curve + activity implied from
  * curve deltas (the whole point of dark bonding is that there is no public
  * trade log to scrape — the curve moving IS the only tell). Right: the
- * burner's session — one L1 deposit, then gasless ER buys/sells. */
+ * wallet's session — one approved deposit, then gasless ER buys/sells. */
 
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import {
   FIRST_WINDOW_MAX_BUY, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, STATE,
   TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fmtSol, fmtTok, sellQuote, short,
@@ -14,7 +15,7 @@ import {
 import {
   PositionView, buyLive, ensureTradeSession, readLaunchLive, readPosition, sellLive,
 } from '../../../lib/trade-live';
-import { burnerBalance } from '../../../lib/burner';
+import { walletBalance } from '../../../lib/wallet-tx';
 
 interface Live {
   name: string; symbol: string; state: number; dark: boolean; createdTs: number;
@@ -37,6 +38,8 @@ const toLive = (l: any, dark: boolean): Live => ({
 export default function LaunchPage() {
   const { id: idParam } = useParams<{ id: string }>();
   const id = Number.parseInt(idParam ?? '', 10);
+  const wallet = useWallet();
+  const { publicKey } = wallet;
 
   const [live, setLive] = useState<Live | null>(null);
   const [gone, setGone] = useState(false);
@@ -53,8 +56,9 @@ export default function LaunchPage() {
   const [ok, setOk] = useState('');
 
   const refreshBal = useCallback(() => {
-    burnerBalance().then(setBal).catch(() => { /* next call */ });
-  }, []);
+    if (!publicKey) { setBal(null); return; }
+    walletBalance(publicKey).then(setBal).catch(() => { /* next call */ });
+  }, [publicKey]);
   useEffect(() => { refreshBal(); }, [refreshBal]);
 
   // the tick rides the ER (gasless node, generous limits); L1 only gets the
@@ -63,7 +67,7 @@ export default function LaunchPage() {
     if (!Number.isInteger(id)) return;
     const [r, p] = await Promise.all([
       readLaunchLive(id).catch(() => null),
-      readPosition(id).catch(() => null),
+      publicKey ? readPosition(publicKey, id).catch(() => null) : Promise.resolve(null),
     ]);
     if (r) {
       const v = toLive(r.l, r.dark);
@@ -80,7 +84,7 @@ export default function LaunchPage() {
       setLive(v);
     } else if (r === null && live === null) setGone(true);
     setPos(p);
-  }, [id, live]);
+  }, [id, live, publicKey]);
 
   useEffect(() => {
     refresh();
@@ -189,12 +193,21 @@ export default function LaunchPage() {
         </section>
 
         <section>
-          {!pos && (
+          {!pos && !publicKey && (
+            <div className="panel">
+              <h3>trade this market</h3>
+              <p className="note" style={{ marginTop: 0 }}>
+                Connect a wallet (top right) to open a session. One approval escrows your stake;
+                every trade after that is gasless — no popups, no fees.
+              </p>
+            </div>
+          )}
+          {!pos && publicKey && (
             <div className="panel">
               <h3>open a session</h3>
               <p className="note" style={{ marginTop: 0 }}>
-                One L1 transaction escrows your stake and hands a throwaway session key to the ER.
-                Every trade after that is gasless.
+                Your wallet approves one transaction: it escrows your stake and hands a throwaway
+                session key to the ER. Every trade after that is gasless — no popups.
               </p>
               <div className="field">
                 <label>deposit (min {fmtSol(MIN_DEPOSIT, 2)}◎ · balance {bal === null ? '…' : `${fmtSol(bal)}◎`})</label>
@@ -203,11 +216,14 @@ export default function LaunchPage() {
               <button
                 className="btn" style={{ width: '100%' }}
                 disabled={!!busy || !tradable || depositLamports < MIN_DEPOSIT || bal === null || bal < depositLamports + 5e6}
-                onClick={run('session open', () => ensureTradeSession(id, depositLamports))}
+                onClick={run('session open', () => ensureTradeSession(wallet, id, depositLamports))}
               >
-                {busy === 'session open' ? 'opening…' : `Deposit ${fmtSol(depositLamports)}◎ & go dark`}
+                {busy === 'session open' ? 'waiting for wallet…' : `Deposit ${fmtSol(depositLamports)}◎ & go dark`}
               </button>
               {!tradable && <p className="note">this market is not tradable ({l.dark ? STATE[l.state] : 'not delegated'})</p>}
+              {tradable && bal !== null && bal < depositLamports + 5e6 && (
+                <p className="note">not enough devnet SOL for this deposit — top up or airdrop from the launch page</p>
+              )}
             </div>
           )}
 
@@ -247,8 +263,8 @@ export default function LaunchPage() {
                   <span className="mono green">{fmtTok(buyOut)} {l.symbol}</span></div>
                 <button
                   className="btn buy" style={{ width: '100%', marginTop: 6 }}
-                  disabled={!!busy || buyLamports <= 0 || buyLamports > avail}
-                  onClick={run('buy', () => buyLive(id, buyLamports))}
+                  disabled={!!busy || !publicKey || buyLamports <= 0 || buyLamports > avail}
+                  onClick={run('buy', () => buyLive(publicKey!, id, buyLamports))}
                 >
                   {busy === 'buy' ? 'buying…' : `Buy ${l.symbol}`}
                 </button>
@@ -271,8 +287,8 @@ export default function LaunchPage() {
                   <span className="mono red">{fmtSol(Number(sellOut), 4)}◎</span></div>
                 <button
                   className="btn sell" style={{ width: '100%', marginTop: 6 }}
-                  disabled={!!busy || sellRaw <= 0n || pos.tokensHeld === 0n}
-                  onClick={run('sell', () => sellLive(id, sellRaw.toString()))}
+                  disabled={!!busy || !publicKey || sellRaw <= 0n || pos.tokensHeld === 0n}
+                  onClick={run('sell', () => sellLive(publicKey!, id, sellRaw.toString()))}
                 >
                   {busy === 'sell' ? 'selling…' : `Sell ${l.symbol}`}
                 </button>

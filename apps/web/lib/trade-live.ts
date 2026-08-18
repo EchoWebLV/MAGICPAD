@@ -15,15 +15,17 @@ import {
   DLP, PROGRAM_ID, connection, decodeLaunch, decodeSession, erConnection,
   erEndpointFor, launchPda, program, sessionPda,
 } from './magicpad';
-import { getBurner, sendWithBurner } from './burner';
+import { WalletLike, sendWithWallet } from './wallet-tx';
 
-const skKey = (id: number) => `magicpad_sk_${id}`;
-export function sessionKeyFor(id: number): Keypair {
+// keyed per launch AND per trader — switching wallets must not reuse a
+// session key registered to someone else's session
+const skKey = (id: number, trader: PublicKey) => `magicpad_sk_${id}_${trader.toBase58()}`;
+export function sessionKeyFor(id: number, trader: PublicKey): Keypair {
   let secret: number[] | null = null;
-  try { secret = JSON.parse(localStorage.getItem(skKey(id)) || 'null'); } catch { /* fresh */ }
+  try { secret = JSON.parse(localStorage.getItem(skKey(id, trader)) || 'null'); } catch { /* fresh */ }
   if (!Array.isArray(secret)) {
     const k = Keypair.generate();
-    localStorage.setItem(skKey(id), JSON.stringify([...k.secretKey]));
+    localStorage.setItem(skKey(id, trader), JSON.stringify([...k.secretKey]));
     return k;
   }
   return Keypair.fromSecretKey(Uint8Array.from(secret));
@@ -53,24 +55,25 @@ async function withL1Retry<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** The ONE approval: escrow `deposit` lamports + delegate, in a single tx.
- *  No-op if the session already exists. */
-export async function ensureTradeSession(id: number, deposit: number): Promise<PublicKey> {
-  const burner = getBurner();
-  const session = sessionPda(id, burner.publicKey);
+/** The ONE wallet approval: escrow `deposit` lamports + delegate, in a
+ *  single tx. No-op if the session already exists. */
+export async function ensureTradeSession(wallet: WalletLike, id: number, deposit: number): Promise<PublicKey> {
+  const trader = wallet.publicKey;
+  if (!trader) throw new Error('connect a wallet first');
+  const session = sessionPda(id, trader);
   if (await withL1Retry(() => connection.getAccountInfo(session))) return session;
 
-  const sk = sessionKeyFor(id);
+  const sk = sessionKeyFor(id, trader);
   const launch = launchPda(id);
   const tx = new Transaction().add(
     await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(deposit)).accountsPartial({
-      trader: burner.publicKey, session, launch, systemProgram: SystemProgram.programId,
+      trader, session, launch, systemProgram: SystemProgram.programId,
     }).instruction(),
     await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
-      payer: burner.publicKey, session, ...delegationMetas(session, 'Session'),
+      payer: trader, session, ...delegationMetas(session, 'Session'),
     }).instruction(),
   );
-  await withL1Retry(() => sendWithBurner(tx));
+  await withL1Retry(() => sendWithWallet(wallet, tx));
   return session;
 }
 
@@ -89,9 +92,9 @@ export async function ensureEr(id: number): Promise<Connection> {
   return erConnection(fqdn);
 }
 
-async function sendSessionTx(id: number, ix: any): Promise<string> {
+async function sendSessionTx(id: number, trader: PublicKey, ix: any): Promise<string> {
   const er = await ensureEr(id);
-  const sk = sessionKeyFor(id);
+  const sk = sessionKeyFor(id, trader);
   const tx = new Transaction().add(ix);
   tx.feePayer = sk.publicKey; // non-delegated payer — gasless in the ER
   tx.recentBlockhash = (await er.getLatestBlockhash('confirmed')).blockhash;
@@ -106,19 +109,17 @@ async function sendSessionTx(id: number, ix: any): Promise<string> {
   throw new Error('ER confirm timeout');
 }
 
-export async function buyLive(id: number, lamports: number): Promise<string> {
-  const burner = getBurner();
-  const sk = sessionKeyFor(id);
-  return sendSessionTx(id, await program.methods.buy(new BN(lamports)).accountsPartial({
-    sessionSigner: sk.publicKey, session: sessionPda(id, burner.publicKey), launch: launchPda(id),
+export async function buyLive(trader: PublicKey, id: number, lamports: number): Promise<string> {
+  const sk = sessionKeyFor(id, trader);
+  return sendSessionTx(id, trader, await program.methods.buy(new BN(lamports)).accountsPartial({
+    sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id),
   }).instruction());
 }
 
-export async function sellLive(id: number, tokensRaw: string): Promise<string> {
-  const burner = getBurner();
-  const sk = sessionKeyFor(id);
-  return sendSessionTx(id, await program.methods.sell(new BN(tokensRaw)).accountsPartial({
-    sessionSigner: sk.publicKey, session: sessionPda(id, burner.publicKey), launch: launchPda(id),
+export async function sellLive(trader: PublicKey, id: number, tokensRaw: string): Promise<string> {
+  const sk = sessionKeyFor(id, trader);
+  return sendSessionTx(id, trader, await program.methods.sell(new BN(tokensRaw)).accountsPartial({
+    sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id),
   }).instruction());
 }
 
@@ -132,11 +133,10 @@ export interface PositionView {
   reconciled: boolean;
 }
 
-/** The burner's live ledger for this launch — ER first (live market),
+/** The trader's live ledger for this launch — ER first (live market),
  *  L1 fallback (settled market). Null if no session yet. */
-export async function readPosition(id: number): Promise<PositionView | null> {
-  const burner = getBurner();
-  const session = sessionPda(id, burner.publicKey);
+export async function readPosition(trader: PublicKey, id: number): Promise<PositionView | null> {
+  const session = sessionPda(id, trader);
   let data: Buffer | null = null;
   try {
     const fqdn = await erEndpointFor(launchPda(id));
