@@ -29,4 +29,14 @@ pub enum MagicPadError {
     BadQuote, // 6011
     #[msg("nothing to claim")]
     NothingToClaim, // 6012
+    #[msg("arithmetic overflow")]
+    Overflow, // 6013
+    #[msg("bad name or symbol")]
+    BadMetadata, // 6014
+    #[msg("unauthorized")]
+    Unauthorized, // 6015
+    #[msg("wrong launch for this account")]
+    WrongLaunch, // 6016
+    #[msg("pot not funded yet — retry after loser sessions reconcile")]
+    PotNotReady, // 6017
 }

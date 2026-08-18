@@ -35,6 +35,12 @@ pub const LAUNCH_FROZEN: u8 = 1;
 pub const LAUNCH_RECONCILED: u8 = 2;
 pub const LAUNCH_GRADUATED: u8 = 3;
 
+// Discriminator-only lamport bucket: the segregated rakeback pool. Losses
+// are paid back from HERE, never from the curve — the two flows can't mix.
+#[account]
+#[derive(InitSpace)]
+pub struct RakebackPool {}
+
 #[account]
 #[derive(InitSpace)]
 pub struct TradeSession {

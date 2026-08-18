@@ -1,0 +1,137 @@
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{self, Transfer};
+use ephemeral_rollups_sdk::anchor::delegate;
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+
+use crate::constants::*;
+use crate::error::MagicPadError;
+use crate::state::{Launch, TradeSession, LAUNCH_BONDING};
+
+// ============================================================================
+// The money rail, cloned from the stakehouse BetSession (devnet-proven):
+// cash and ledger split lanes. The deposit lands in a session PDA on L1
+// BEFORE the rollup ever sees the session — that escrow is the hard ceiling
+// on everything the ER can ever do with this trader's SOL. Inside the ER
+// the throwaway session key signs gasless buys/sells that only move ledger
+// numbers; reconcile_trade_session moves the actual lamports afterward,
+// gated by the committed ledger.
+// ============================================================================
+
+// ---- open_trade_session (L1, the trader). One approval covers the whole
+// bonding phase: escrow the bankroll and pin the session key. The client
+// bundles delegate_trade_session into the same tx — then zero popups. ----
+#[derive(Accounts)]
+#[instruction(launch_id: u64)]
+pub struct OpenTradeSession<'info> {
+    #[account(mut)]
+    pub trader: Signer<'info>,
+
+    #[account(init, payer = trader, space = 8 + TradeSession::INIT_SPACE,
+        seeds = [SESSION_SEED, launch_id.to_le_bytes().as_ref(), trader.key().as_ref()], bump)]
+    pub session: Box<Account<'info, TradeSession>>,
+
+    /// CHECK: the launch PDA — owned by the DELEGATION program while it
+    /// lives in the ER, so no Account<> owner check can pass here. Seeds
+    /// pin the address; we hand-deserialize the L1 snapshot (data is
+    /// preserved under delegation) just to gate on state.
+    #[account(seeds = [LAUNCH_SEED, launch_id.to_le_bytes().as_ref()], bump)]
+    pub launch: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+pub fn open_trade_session_handler(
+    ctx: Context<OpenTradeSession>,
+    launch_id: u64,
+    session_key: Pubkey,
+    deposit: u64,
+) -> Result<()> {
+    require!(deposit >= MIN_DEPOSIT, MagicPadError::DepositTooSmall);
+    require!(
+        session_key != Pubkey::default(),
+        MagicPadError::SessionKeyMismatch
+    );
+    {
+        // The L1 snapshot is pre-delegation state — enough: a launch never
+        // returns to BONDING once it leaves, so this gate can only be stale
+        // toward frozen, and every ER buy re-checks state live anyway.
+        let data = ctx.accounts.launch.try_borrow_data()?;
+        let l = Launch::try_deserialize(&mut &data[..])?;
+        require!(l.id == launch_id, MagicPadError::WrongLaunch);
+        require!(l.state == LAUNCH_BONDING, MagicPadError::LaunchNotBonding);
+    }
+
+    let s = &mut ctx.accounts.session;
+    s.launch_id = launch_id;
+    s.trader = ctx.accounts.trader.key();
+    s.session_key = session_key;
+    s.deposit = deposit;
+    s.sol_spent = 0;
+    s.sol_proceeds = 0;
+    s.tokens_held = 0;
+    s.cost_basis = 0;
+    s.realized_loss = 0;
+    s.reconciled = false;
+    s.tokens_claimed = false;
+    s.rakeback_claimed = false;
+    s.bump = ctx.bumps.session;
+
+    // The escrow: wallet → session PDA, on L1, before the ER ever sees it.
+    system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.key(),
+            Transfer {
+                from: ctx.accounts.trader.to_account_info(),
+                to: ctx.accounts.session.to_account_info(),
+            },
+        ),
+        deposit,
+    )?;
+    Ok(())
+}
+
+// ---- delegate_trade_session (L1, the trader — bundled right after open).
+// Payer-gated by construction: the seeds bind the PDA to the payer, so a
+// stranger can't delegate someone else's session out from under them. ----
+#[delegate]
+#[derive(Accounts)]
+#[instruction(launch_id: u64)]
+pub struct DelegateTradeSession<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: delegated via the DLP CPI; Unchecked so Anchor doesn't
+    /// re-serialize after ownership moves to the delegation program.
+    #[account(mut, del,
+        seeds = [SESSION_SEED, launch_id.to_le_bytes().as_ref(), payer.key().as_ref()], bump)]
+    pub session: UncheckedAccount<'info>,
+}
+
+pub fn delegate_trade_session_handler(
+    ctx: Context<DelegateTradeSession>,
+    launch_id: u64,
+) -> Result<()> {
+    // pre-CPI sanity on the not-yet-delegated data
+    {
+        let data = ctx.accounts.session.try_borrow_data()?;
+        let s = TradeSession::try_deserialize(&mut &data[..])?;
+        require!(s.launch_id == launch_id, MagicPadError::WrongLaunch);
+        require!(
+            s.trader == ctx.accounts.payer.key(),
+            MagicPadError::Unauthorized
+        );
+        require!(!s.reconciled, MagicPadError::AlreadyReconciled);
+    }
+    let payer_key = ctx.accounts.payer.key();
+    ctx.accounts.delegate_session(
+        &ctx.accounts.payer,
+        &[SESSION_SEED, &launch_id.to_le_bytes(), payer_key.as_ref()],
+        DelegateConfig {
+            // pin the SAME validator the launch delegated to: a trade
+            // touches launch + session atomically, one ER node for both
+            validator: ctx.remaining_accounts.first().map(|a| a.key()),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
+}

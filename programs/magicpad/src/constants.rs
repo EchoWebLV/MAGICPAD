@@ -2,6 +2,7 @@ pub const PLATFORM_SEED: &[u8] = b"platform";
 pub const LAUNCH_SEED: &[u8] = b"launch";
 pub const SESSION_SEED: &[u8] = b"tsession";
 pub const RAKEBACK_SEED: &[u8] = b"rakeback";
+pub const MINT_SEED: &[u8] = b"mint"; // PDA mint per launch — derivable, no keypair to pass
 
 pub const LAUNCH_FEE_LAMPORTS: u64 = 1_000_000_000; // 1 SOL, the pitch
 pub const TOKEN_DECIMALS: u8 = 6;
