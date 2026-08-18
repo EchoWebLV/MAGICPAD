@@ -27,6 +27,9 @@ import { launchSessionKey } from '../../lib/trade-live';
 import { requestAirdrop, sendWithWallet, walletBalance } from '../../lib/wallet-tx';
 
 const FEE = 1_000_000_000;
+// buy-and-deploy is built and devnet-proven (launch 7) but parked for now —
+// flip this to show the first-buy field again; the whole rail sits behind it
+const DEV_BUY_ENABLED = false;
 const DEV_BUY_MAX = 0.5;   // FIRST_WINDOW_MAX_BUY — the anti-snipe cap binds the creator too
 const DEV_BUY_MIN = 0.01;  // MIN_DEPOSIT — the escrow floor
 
@@ -184,6 +187,7 @@ export default function Create() {
           <label>ticker (≤ 10 chars)</label>
           <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="MIDNIGHT" maxLength={10} />
         </div>
+        {DEV_BUY_ENABLED && (
         <div className="field">
           <label>your first buy (optional, ◎)</label>
           <input
@@ -204,6 +208,7 @@ export default function Create() {
             </p>
           )}
         </div>
+        )}
         <div className="field">
           <label>description (optional)</label>
           <textarea
@@ -249,11 +254,18 @@ export default function Create() {
             you need {fmtSol(FEE + devLamports)}◎ + dust — airdrop devnet SOL or top the wallet up
           </p>
         )}
-        <p className="note">
-          One transaction does all of it: the market is born, your buy lands on the
-          curve, and everything goes dark in the Ephemeral Rollup — your position
-          exists before anyone can even see the token.
-        </p>
+        {devLamports > 0 ? (
+          <p className="note">
+            One transaction does all of it: the market is born, your buy lands on the
+            curve, and everything goes dark in the Ephemeral Rollup — your position
+            exists before anyone can even see the token.
+          </p>
+        ) : (
+          <p className="note">
+            The token mint exists from second zero with zero supply. All bonding happens dark
+            inside the Ephemeral Rollup — no L1 trail to snipe, no gas to pay.
+          </p>
+        )}
         {msg && <p className="ok">{msg}</p>}
         {err && <p className="err">{err}</p>}
       </div>
