@@ -40,6 +40,29 @@ winner-first reconcile fails clean (PotNotReady), the conservation table
 balances exactly, rakeback pays real lamports, and claim_tokens mints real
 SPL. A killed run picks back up with `resume <id>`.
 
+The keeper is the janitor that makes settlement autonomous. It never touches
+a live market; once a launch freezes it commits sessions home, reconciles
+losers-first, cranks token claims and rakeback, and graduates what qualifies:
+
+```bash
+node scripts/keeper.mjs            # loop; KEEPER_ONCE=1 for a single tick
+```
+
+## Web terminal
+
+```bash
+pnpm install
+pnpm --filter @magicpad/web dev    # http://localhost:3020
+```
+
+Three columns — New, Final Stretch, Migrated — over a dual sweep: home
+launches read from the program, dark launches discovered under the delegation
+program and overlaid with their live ER state. The terminal page trades the
+real rail from a localStorage burner: one deposit transaction, then gasless
+buys and sells against the ER with quote previews mirroring the on-chain
+curve. Dark markets have no public trade log by design, so the activity feed
+is implied from curve deltas.
+
 ## Tests
 
 ```bash
