@@ -389,6 +389,55 @@ if (cmd === 'auto') {
   [wallet], 'delegate_launch — the market goes DARK');
 
   await runPipeline(id);
+} else if (cmd === 'seed') {
+  // create a launch and LEAVE it bonding with a live position — fodder for
+  // the web terminal and the keeper's autonomous-settle proof
+  const name = args[0] ?? 'NIGHTRUN';
+  const symbol = args[1] ?? 'NIGHT';
+  const buyLamports = Math.floor(Number(args[2] ?? '0.05') * LAMPORTS_PER_SOL);
+  const dep = Math.floor(0.1 * LAMPORTS_PER_SOL);
+  console.log(`wallet ${wallet.publicKey.toBase58()} · ${sol(await conn.getBalance(wallet.publicKey))}`);
+
+  const id = (await program.account.platform.fetch(PLATFORM)).launchSeq.toNumber();
+  const launch = launchPda(id);
+  await sendL1([await program.methods.createLaunch(name, symbol).accountsPartial({
+    creator: wallet.publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+    tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
+  }).instruction()], [wallet], `create_launch id=${id} "${name}" (1 SOL fee)`);
+  await sendL1([await program.methods.delegateLaunch(new BN(id)).accountsPartial({
+    payer: wallet.publicKey, platform: PLATFORM, launch,
+    ...delegationMetas(launch, 'Launch'),
+  }).remainingAccounts(validatorRemaining()).instruction()], [wallet], 'delegate_launch');
+
+  const sk = persistedKey(skPath(id, 'wallet'));
+  const session = sessionPda(id, wallet.publicKey);
+  await sendL1([
+    await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(dep)).accountsPartial({
+      trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId,
+    }).instruction(),
+    await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
+      payer: wallet.publicKey, session, ...delegationMetas(session, 'Session'),
+    }).remainingAccounts(validatorRemaining()).instruction(),
+  ], [wallet], `open session: escrow ${sol(dep)} + delegate`);
+
+  const er = new Connection(await erFor(launch, 'launch'), 'confirmed');
+  await erFor(session, 'session');
+  await sendEr(er, [await program.methods.buy(new BN(buyLamports)).accountsPartial({
+    sessionSigner: sk.publicKey, session, launch,
+  }).instruction()], sk, 'seed buy');
+  const l = decodeLaunch((await erAccount(er, launch, 'launch')).data);
+  console.log(`seeded: launch ${id} "${name}" BONDING in the ER — raised ${sol(l.realSolRaised)} sold ${l.tokensSold}`);
+  console.log(`leave it dark; freeze later with: node scripts/demo-trader.mjs freeze ${id}`);
+} else if (cmd === 'freeze') {
+  // admin fizzle switch — after this the keeper settles the launch on its own
+  const id = Number(args[0]);
+  if (!Number.isInteger(id)) throw new Error('freeze needs a launch id');
+  const launch = launchPda(id);
+  const er = new Connection(await erFor(launch, 'launch'), 'confirmed');
+  await sendEr(er, [await program.methods.freezeLaunch().accountsPartial({
+    admin: wallet.publicKey, platform: PLATFORM, launch,
+  }).instruction()], wallet, 'freeze_launch');
+  console.log(`launch ${id} FROZEN in the ER — the keeper takes it from here`);
 } else if (cmd === 'resume') {
   const id = Number(args[0]);
   if (!Number.isInteger(id)) throw new Error('resume needs a launch id');
