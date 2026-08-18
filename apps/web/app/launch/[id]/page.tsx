@@ -6,12 +6,13 @@
  * wallet's session — one approved deposit, then gasless ER buys/sells. */
 
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   FIRST_WINDOW_MAX_BUY, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, STATE,
   TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fmtSol, fmtTok, sellQuote, short,
 } from '../../../lib/magicpad';
+import { HistRow, fetchHistory } from '../../../lib/history';
 import {
   PositionView, buyLive, ensureTradeSession, readLaunchLive, readPosition, sellLive,
 } from '../../../lib/trade-live';
@@ -22,8 +23,6 @@ interface Live {
   virtualSol: bigint; virtualTok: bigint; realSolRaised: number; tokensSold: number;
   sessionsOpened: number; mint: string;
 }
-interface Tick { side: 'BUY' | 'SELL'; sol: number; tok: number; at: number }
-
 const toLive = (l: any, dark: boolean): Live => ({
   name: l.name, symbol: l.symbol, state: l.state, dark,
   createdTs: l.createdTs.toNumber(),
@@ -45,8 +44,7 @@ export default function LaunchPage() {
   const [gone, setGone] = useState(false);
   const [pos, setPos] = useState<PositionView | null>(null);
   const [bal, setBal] = useState<number | null>(null);
-  const [feed, setFeed] = useState<Tick[]>([]);
-  const prev = useRef<Live | null>(null);
+  const [hist, setHist] = useState<HistRow[] | null>(null);
 
   const [depositIn, setDepositIn] = useState('0.05');
   const [buyIn, setBuyIn] = useState('0.01');
@@ -61,48 +59,21 @@ export default function LaunchPage() {
   }, [publicKey]);
   useEffect(() => { refreshBal(); }, [refreshBal]);
 
-  // dark markets have no public log to backfill from — what this browser
-  // witnessed is all there is, so it survives refreshes in localStorage
-  const feedKey = `magicpad_feed_${id}`;
-  useEffect(() => {
-    if (!Number.isInteger(id)) return;
-    try {
-      const arr = JSON.parse(localStorage.getItem(feedKey) ?? '[]');
-      if (Array.isArray(arr)) {
-        setFeed(arr.filter((t) => t && (t.side === 'BUY' || t.side === 'SELL')
-          && Number.isFinite(t.sol) && Number.isFinite(t.tok) && Number.isFinite(t.at)));
-      }
-    } catch { /* fresh feed */ }
-  }, [id, feedKey]);
-
   // the tick rides the ER (gasless node, generous limits); L1 only gets the
-  // rare owner-flip check — public devnet 429s anything chattier
+  // rare owner-flip check — public devnet 429s anything chattier. History
+  // shares the tick: its ER sweep is cheap and its L1 sweep self-throttles.
   const refresh = useCallback(async () => {
     if (!Number.isInteger(id)) return;
-    const [r, p] = await Promise.all([
+    const [r, p, h] = await Promise.all([
       readLaunchLive(id).catch(() => null),
       publicKey ? readPosition(publicKey, id).catch(() => null) : Promise.resolve(null),
+      fetchHistory(id).catch(() => null),
     ]);
-    if (r) {
-      const v = toLive(r.l, r.dark);
-      const was = prev.current;
-      if (was && v.tokensSold !== was.tokensSold) {
-        const dTok = v.tokensSold - was.tokensSold;
-        const dSol = v.realSolRaised - was.realSolRaised;
-        const t: Tick = dTok > 0
-          ? { side: 'BUY', sol: dSol, tok: dTok, at: Date.now() }
-          : { side: 'SELL', sol: -dSol, tok: -dTok, at: Date.now() };
-        setFeed((f) => {
-          const nf = [t, ...f].slice(0, 40);
-          try { localStorage.setItem(feedKey, JSON.stringify(nf)); } catch { /* quota */ }
-          return nf;
-        });
-      }
-      prev.current = v;
-      setLive(v);
-    } else if (r === null && live === null) setGone(true);
+    if (r) setLive(toLive(r.l, r.dark));
+    else if (r === null && live === null) setGone(true);
     setPos(p);
-  }, [id, feedKey, live, publicKey]);
+    if (h) setHist(h);
+  }, [id, live, publicKey]);
 
   useEffect(() => {
     refresh();
@@ -170,6 +141,10 @@ export default function LaunchPage() {
               <span className="mono">{fmtSol(l.realSolRaised)}◎ / {fmtSol(GRADUATION_LAMPORTS, 0)}◎</span>
             </div>
             <div className="kv">
+              <span className="k">bonding progress</span>
+              <span className={`mono${pct >= 60 ? ' green' : ''}`}>{pct.toFixed(1)}%</span>
+            </div>
+            <div className="kv">
               <span className="k">tokens sold</span><span className="mono">{fmtTok(l.tokensSold)}</span>
             </div>
             <div className="kv">
@@ -193,22 +168,28 @@ export default function LaunchPage() {
           </div>
 
           <div className="panel" style={{ marginTop: 12 }}>
-            <h3>curve activity <span className="faint">(implied from curve deltas — dark markets have no public trade log)</span></h3>
+            <h3>history <span className="faint">(deposits on L1, dark trades read from the rollup ledger)</span></h3>
             <div className="feed">
-              {feed.length === 0 && (
+              {(!hist || hist.length === 0) && (
                 <div className="empty" style={{ padding: 18 }}>
-                  {l.tokensSold > 0
-                    ? `the curve moved before this terminal was watching: ${fmtTok(l.tokensSold)} ${l.symbol} sold, ${fmtSol(l.realSolRaised)}◎ in`
-                    : 'watching the curve…'}
+                  {!hist ? 'reading the ledgers…'
+                    : l.tokensSold > 0
+                      ? `the curve moved before history reached back: ${fmtTok(l.tokensSold)} ${l.symbol} sold, ${fmtSol(l.realSolRaised)}◎ in`
+                      : 'no activity yet'}
                 </div>
               )}
-              {feed.map((t) => (
-                <div className="t mono" key={t.at + t.side}>
-                  <span className={t.side === 'BUY' ? 'green' : 'red'}>{t.side}</span>
-                  <span>{fmtSol(t.sol, 4)}◎</span>
-                  <span className="dim">{fmtTok(t.tok)} {l.symbol}</span>
+              {hist?.map((e) => (
+                <div className="t mono" key={e.sig}>
+                  <span className={e.kind === 'BUY' ? 'green' : e.kind === 'SELL' ? 'red' : e.kind === 'DEPOSIT' ? 'magic' : 'faint'}>
+                    {e.kind}
+                  </span>
+                  <span>
+                    {e.sol !== undefined ? `${fmtSol(e.sol, 4)}◎`
+                      : e.tok !== undefined ? `${fmtTok(e.tok)} ${l.symbol}` : ''}
+                  </span>
+                  <span className="dim" title={e.actor}>{short(e.actor)}</span>
                   <span className="faint" style={{ marginLeft: 'auto' }}>
-                    {new Date(t.at).toLocaleTimeString('en-US', { hour12: false })}
+                    {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })}
                   </span>
                 </div>
               ))}
