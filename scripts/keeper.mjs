@@ -187,7 +187,9 @@ async function tendHome(id, launch, l, adminKey) {
         systemProgram: SystemProgram.programId,
       }).instruction()], `claim_tokens → ${s.trader.toBase58().slice(0, 8)}…`);
     }
-    if (!s.rakebackClaimed && s.realizedLoss.gtn(0)) {
+    // gate on the PAYOUT, not the loss — a loss under 10 lamports floors to a
+    // zero rakeback and the program rejects it with NothingToClaim forever
+    if (!s.rakebackClaimed && s.realizedLoss.divn(10).gtn(0)) {
       await sendL1([await program.methods.claimRakeback().accountsPartial({
         trader: s.trader, session: pubkey, rakebackPool: RAKEBACK,
       }).instruction()], `claim_rakeback ${sol(s.realizedLoss.divn(10))} → ${s.trader.toBase58().slice(0, 8)}…`);
