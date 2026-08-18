@@ -1,0 +1,24 @@
+[toolchain]
+anchor_version = "0.31.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+magicpad = "27HH4WUhKMmkza5NTpAjwhHkRwiPotPw55HxvjDRDsws"
+
+[programs.devnet]
+magicpad = "27HH4WUhKMmkza5NTpAjwhHkRwiPotPw55HxvjDRDsws"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+# program tests live in the standalone litesvm crate (solana pins conflict
+# with the rollups SDK graph inside the program crate — stakehouse precedent)
+test = "cd litesvm-tests && cargo test"

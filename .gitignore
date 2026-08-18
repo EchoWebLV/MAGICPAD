@@ -1,0 +1,12 @@
+target/
+node_modules/
+.anchor/
+test-ledger/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+apps/web/.next/
+apps/web/tsconfig.tsbuildinfo
+scripts/.session-*.json

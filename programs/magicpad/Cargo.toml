@@ -1,0 +1,31 @@
+[package]
+name = "magicpad"
+version = "0.1.0"
+description = "MagicPad — dark-bonding launchpad: gasless curve trading in a MagicBlock ER, rakeback on losses, graduates to Meteora"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "magicpad"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+# One anchor-lang for the WHOLE graph — the stakehouse-proven set. The
+# MagicBlock SDK's "anchor" feature maps to anchor-lang-current = "1.0",
+# so =1.0.2 here unifies everything (mixing 0.31 with the SDK splits the
+# graph into multiple anchor-langs and nothing type-checks).
+anchor-lang = { version = "=1.0.2", features = ["init-if-needed"] }
+anchor-spl = "=1.0.2"
+# MagicBlock: delegation + commit/undelegate. No VRF — the curve is deterministic.
+ephemeral-rollups-sdk = { version = "=0.14.3", features = ["anchor"] }
+
+# NO [dev-dependencies]: litesvm's solana pins conflict with the rollups
+# SDK graph — integration tests live in ../../litesvm-tests (standalone).
+# curve.rs unit tests are pure std and need nothing extra.
