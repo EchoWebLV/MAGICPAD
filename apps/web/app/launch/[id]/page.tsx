@@ -165,6 +165,11 @@ export default function LaunchPage() {
   // the program floor for a top-up is MIN_DEPOSIT
   const shortfall = pos && buyLamports > avail ? Math.max(buyLamports - avail, MIN_DEPOSIT) : 0;
   const walletCovers = bal !== null && bal >= shortfall + 5e6; // margin for fees + note rent
+  // the L1 escrow leg is the slow one — when it must run anyway, raise by
+  // one extra buy of the same size (wallet affording), so the NEXT big buy
+  // stays inside escrow and rides the rollup alone
+  const raise = shortfall > 0 && bal !== null && bal >= shortfall + buyLamports + 5e6
+    ? shortfall + buyLamports : shortfall;
   const sellRawWanted = BigInt(Math.round((Number.parseFloat(sellIn) || 0) * 10 ** TOKEN_DECIMALS));
   const sellRaw = pos && sellRawWanted > pos.tokensHeld ? pos.tokensHeld : sellRawWanted;
   const sellOut = sellRaw > 0n ? sellQuote(l.virtualSol, l.virtualTok, sellRaw) : 0n;
@@ -418,7 +423,7 @@ export default function LaunchPage() {
                   onClick={run('buy', async () => {
                     if (shortfall > 0) {
                       setBusy('top-up');
-                      await topUpSession(wallet, id, shortfall);
+                      await topUpSession(wallet, id, raise);
                       setBusy('buy');
                     }
                     await buyLive(wallet, id, buyLamports);
@@ -428,8 +433,9 @@ export default function LaunchPage() {
                 </button>
                 {shortfall > 0 && walletCovers && (
                   <p className="note">
-                    bigger than your free escrow ({fmtSol(avail)}◎) — this buy moves{' '}
-                    {fmtSol(shortfall)}◎ from your wallet into the escrow first, then runs
+                    over your free escrow ({fmtSol(avail)}◎). this buy first moves{' '}
+                    {fmtSol(raise)}◎ from wallet to escrow{raise > shortfall
+                      ? ', sized so your next buy this big skips the wait' : ''}, then runs
                     gasless as usual.
                   </p>
                 )}

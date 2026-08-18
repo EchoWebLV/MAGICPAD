@@ -235,15 +235,20 @@ async function strandedNotes(id: number, trader: PublicKey) {
   return notes;
 }
 
+// a sweep that found nothing stays true for a while — strays only appear
+// when a top-up aborts mid-flight, and that path clears this memo
+const sweepClean = new Map<string, number>();
+
 /** Apply every unapplied delegated note into the session deposit; returns
  *  the lamports recovered. Best-effort — a sweep that can't run must not
  *  block a fresh top-up (unapplied notes refund in full at settle). */
 async function sweepStrandedNotes(wallet: WalletLike, id: number): Promise<number> {
   const trader = wallet.publicKey!;
+  if (Date.now() - (sweepClean.get(memoKeyOf(id, trader)) ?? 0) < 60_000) return 0;
   let recovered = 0;
   try {
     const notes = await withL1Retry(() => strandedNotes(id, trader));
-    if (!notes.length) return 0;
+    if (!notes.length) { sweepClean.set(memoKeyOf(id, trader), Date.now()); return 0; }
     const er = await ensureEr(id);
     for (const n of notes) {
       const live = await er.getAccountInfo(n.pubkey, 'confirmed').catch(() => null);
@@ -274,16 +279,25 @@ async function erDeposit(id: number, trader: PublicKey): Promise<number | null> 
 async function applyNote(wallet: WalletLike, id: number, nonce: number, amount: number, tries: number): Promise<boolean> {
   const trader = wallet.publicKey!;
   const session = sessionPda(id, trader);
+  const note = topupPda(id, trader, nonce);
+  const er = await ensureEr(id);
   const baseline = await erDeposit(id, trader);
   const applied = async () => {
     const now = await erDeposit(id, trader);
     return baseline !== null && now !== null && now >= baseline + amount;
   };
+  // the ER clones delegated notes lazily; a send before the clone lands
+  // just bounces through preflight. Watching for the account is cheaper
+  // and catches the earliest applyable moment.
+  for (const t = Date.now(); Date.now() - t < 8_000;) {
+    if (await er.getAccountInfo(note, 'confirmed').catch(() => null)) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
   let healed = false;
   for (let i = 0; i < tries; i++) {
     const sk = await sessionSigner(wallet, id);
     const applyIx = await program.methods.applyTopUp(new BN(nonce)).accountsPartial({
-      sessionSigner: sk.publicKey, session, launch: launchPda(id), note: topupPda(id, trader, nonce),
+      sessionSigner: sk.publicKey, session, launch: launchPda(id), note,
     }).instruction();
     try { await sendSessionTx(id, sk, applyIx); return true; }
     catch (e) {
@@ -297,7 +311,7 @@ async function applyNote(wallet: WalletLike, id: number, nonce: number, amount: 
         continue;
       }
       if (code !== null) throw humanizeTradeError(e); // any other program verdict is final
-      await new Promise((r) => setTimeout(r, Math.min(700 * (i + 1), 4000)));
+      await new Promise((r) => setTimeout(r, Math.min(400 * (i + 1), 2000)));
     }
   }
   return false;
@@ -334,6 +348,8 @@ export async function topUpSession(wallet: WalletLike, id: number, lamports: num
   await withL1Retry(() => sendWithWallet(wallet, tx));
 
   if (!(await applyNote(wallet, id, nonce, amount, 15))) {
+    // a note is now parked — make sure the next attempt actually sweeps
+    sweepClean.delete(memoKeyOf(id, trader));
     throw new Error('escrow parked on L1 and the rollup is still syncing it — your next buy sweeps it in automatically');
   }
 }
