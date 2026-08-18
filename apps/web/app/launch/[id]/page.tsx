@@ -12,6 +12,7 @@ import { privyEnabled, useActiveWallet } from '../../../lib/use-active-wallet';
 import { PublicKey } from '@solana/web3.js';
 import CurveChart from '../../../components/CurveChart';
 import TokenArt from '../../../components/TokenArt';
+import { SHOW_DARK_CHIP } from '../../../lib/flags';
 import {
   LaunchMeta, attachMetaTx, clearMeta, pinAssets, resolveMeta, squashImage,
 } from '../../../lib/metadata';
@@ -222,7 +223,9 @@ export default function LaunchPage() {
 
   const depositLamports = Math.round((Number.parseFloat(depositIn) || 0) * LAMPORTS);
   const chip = l.state === 0
-    ? (l.dark ? <span className="chip dark">DARK</span> : <span className="chip">BONDING</span>)
+    ? (SHOW_DARK_CHIP
+      ? (l.dark ? <span className="chip dark">DARK</span> : <span className="chip">BONDING</span>)
+      : null)
     : l.state === 3 ? <span className="chip grad">GRADUATED</span>
       : <span className="chip frozen">{STATE[l.state]}</span>;
 

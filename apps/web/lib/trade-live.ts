@@ -435,6 +435,27 @@ export async function sellLive(wallet: WalletLike, id: number, tokensRaw: string
   }).instruction());
 }
 
+/** One click, any market: open the escrow if this is the trader's first
+ *  touch, raise it if the size outruns what's already in there, then buy
+ *  gaslessly. The escrow legs are skipped whenever they aren't needed, so
+ *  a repeat buy inside escrow stays a single ER round-trip.
+ *
+ *  A position that can't be read (ER hiccup) falls through to
+ *  ensureTradeSession, which is itself a no-op when the session exists. */
+export async function quickBuy(wallet: WalletLike, id: number, lamports: number): Promise<string> {
+  const trader = wallet.publicKey;
+  if (!trader) throw new Error('connect a wallet first');
+  let pos: PositionView | null = null;
+  try { pos = await readPosition(trader, id); } catch { /* unknown — ensure covers it */ }
+  if (!pos) {
+    await ensureTradeSession(wallet, id, Math.max(lamports, MIN_DEPOSIT));
+  } else {
+    const avail = pos.deposit + pos.solProceeds - pos.solSpent;
+    if (lamports > avail) await topUpSession(wallet, id, Math.max(lamports - avail, MIN_DEPOSIT));
+  }
+  return buyLive(wallet, id, lamports);
+}
+
 export interface PositionView {
   deposit: number;
   solSpent: number;

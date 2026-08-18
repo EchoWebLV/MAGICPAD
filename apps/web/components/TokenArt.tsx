@@ -8,18 +8,24 @@
 import { useEffect, useState } from 'react';
 import { LaunchMeta, resolveMeta } from '../lib/metadata';
 
-export default function TokenArt({ id, creator, symbol, size }: {
-  id: number; creator: string; symbol: string; size: number;
-}) {
+/** One launch's face and links. resolveMeta memoises per id, so every
+ *  caller on a row shares a single lookup. */
+export function useLaunchMeta(id: number, creator: string): LaunchMeta | null {
   const [meta, setMeta] = useState<LaunchMeta | null>(null);
-  const [broken, setBroken] = useState(false);
-
   useEffect(() => {
     let live = true;
-    setBroken(false);
     resolveMeta(id, creator).then((m) => { if (live) setMeta(m); });
     return () => { live = false; };
   }, [id, creator]);
+  return meta;
+}
+
+export default function TokenArt({ id, creator, symbol, size }: {
+  id: number; creator: string; symbol: string; size: number;
+}) {
+  const meta = useLaunchMeta(id, creator);
+  const [broken, setBroken] = useState(false);
+  useEffect(() => { setBroken(false); }, [meta?.image]);
 
   const px = { width: size, height: size };
   if (meta?.image && !broken) {

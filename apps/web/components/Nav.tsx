@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import Glyph from './Glyph';
 import { connection, fmtSol, short } from '../lib/magicpad';
 import { requestAirdrop } from '../lib/wallet-tx';
 import { privyEnabled, useActiveWallet } from '../lib/use-active-wallet';
@@ -55,15 +56,11 @@ export default function Nav() {
       {mounted && privyEnabled && !w.privyAuthed && w.login && (
         <button className="btn" onClick={w.login} disabled={!w.privyReady}>Log in</button>
       )}
+      {/* the identity lives in the wallet room now — the nav just points at it */}
       {mounted && w.source === 'privy' && (
-        <span className="pill mono who" title={publicKey?.toBase58()}>
-          <Link href="/wallet" className="linkish">
-            {w.who ?? short(publicKey?.toBase58() ?? '')}
-          </Link>
-          {w.logout && (
-            <button className="linkish" onClick={() => w.logout!()} style={{ marginLeft: 8 }}>out</button>
-          )}
-        </span>
+        <Link href="/wallet" className="pill icon" aria-label="your wallet" title={short(publicKey?.toBase58() ?? '')}>
+          <Glyph n="wallet" size={15} />
+        </Link>
       )}
       {mounted && w.source !== 'privy' && <WalletMultiButton />}
       <Link href="/create" className="btn">+ Launch</Link>

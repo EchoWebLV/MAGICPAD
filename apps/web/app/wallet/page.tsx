@@ -1,17 +1,108 @@
 'use client';
 
-/* The wallet room: receive (QR + full address), live balance, private-key
- * export, and logout. Reached by clicking your name in the nav. Export
- * opens Privy's own secure window — the key renders inside Privy's iframe
- * and never touches this app's code. */
+/* The wallet room: who you are, everything you hold, receive (QR + full
+ * address), live balance, private-key export, and the way out. Reached by
+ * the wallet mark in the nav. Export opens Privy's own secure window — the
+ * key renders inside Privy's iframe and never touches this app's code. */
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { connection, fmtSol, solscanAccount } from '../../lib/magicpad';
+import { PublicKey } from '@solana/web3.js';
+import TokenArt from '../../components/TokenArt';
+import Glyph from '../../components/Glyph';
+import { copyText } from '../../lib/clip';
+import {
+  LaunchView, STATE, connection, fetchLaunches, fmtSol, fmtTok, sellQuote, solscanAccount,
+} from '../../lib/magicpad';
+import { PositionView, readPosition } from '../../lib/trade-live';
 import { privyEnabled, useActiveWallet } from '../../lib/use-active-wallet';
 import { useExportWallet } from '@privy-io/react-auth/solana';
+
+interface Holding { l: LaunchView; pos: PositionView; value: number; escrow: number }
+
+// below this a number reads as 0.000◎ — not worth a line
+const DUST = 1_000_000;
+
+/** Everything this wallet is in: one position read per market, ER first.
+ *  A market shows up if tokens are held or SOL is still parked in its
+ *  escrow — both are money that belongs to the trader. */
+function Holdings({ owner }: { owner: PublicKey }) {
+  const [rows, setRows] = useState<Holding[] | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const tick = async () => {
+      try {
+        const launches = await fetchLaunches();
+        const found: Holding[] = [];
+        await Promise.all(launches.map(async (l) => {
+          let pos: PositionView | null = null;
+          try { pos = await readPosition(owner, l.id); } catch { return; }
+          if (!pos) return;
+          const escrow = pos.deposit + pos.solProceeds - pos.solSpent;
+          if (pos.tokensHeld === 0n && escrow <= 0) return;
+          const value = Number(sellQuote(l.virtualSol, l.virtualTok, pos.tokensHeld));
+          found.push({ l, pos, value, escrow });
+        }));
+        found.sort((a, b) => (b.value + b.escrow) - (a.value + a.escrow));
+        if (live) setRows(found);
+      } catch { /* next tick */ }
+    };
+    tick();
+    const t = setInterval(tick, 15000);
+    window.addEventListener('magicpad:activity', tick);
+    return () => { live = false; clearInterval(t); window.removeEventListener('magicpad:activity', tick); };
+  }, [owner]);
+
+  const worth = rows?.reduce((s, r) => s + r.value + r.escrow, 0) ?? 0;
+
+  return (
+    <div className="panel gap">
+      <h3>
+        holdings
+        <span className="faint">{rows === null ? 'reading' : `${rows.length} market${rows.length === 1 ? '' : 's'}`}</span>
+        {rows !== null && rows.length > 0 && <span className="hworth mono">{fmtSol(worth)}◎</span>}
+      </h3>
+      {rows === null && <div className="empty">looking through the markets</div>}
+      {rows !== null && rows.length === 0 && (
+        <div className="empty">nothing held yet — <Link className="linkish" href="/">find a market</Link></div>
+      )}
+      {rows?.map(({ l, pos, value, escrow }) => {
+        const pnl = value - pos.costBasis;
+        const rake = Math.floor(pos.realizedLoss / 10);
+        const held = pos.tokensHeld > 0n;
+        return (
+          <Link key={l.id} href={`/launch/${l.id}`} className="hold">
+            <TokenArt id={l.id} creator={l.creator} symbol={l.symbol} size={38} />
+            <div className="hbody">
+              <div className="htop">
+                <span className="name">{l.name}</span>
+                <span className="mono y">${l.symbol}</span>
+                {l.state !== 0 && <span className="chip frozen">{STATE[l.state]}</span>}
+              </div>
+              <div className="hstats mono">
+                {held && <span>{fmtTok(pos.tokensHeld)} {l.symbol}</span>}
+                {escrow > 0 && <span className="faint">escrow {fmtSol(escrow)}◎</span>}
+                {/* dust rounds to 0.000◎ — say nothing rather than say zero */}
+                {rake >= DUST && <span className="faint">rakeback {fmtSol(rake)}◎</span>}
+              </div>
+            </div>
+            <div className="hval mono">
+              <b>{fmtSol(value + escrow)}◎</b>
+              {held && Math.abs(pnl) >= DUST && (
+                <em className={pnl >= 0 ? 'green' : 'red'}>
+                  {pnl >= 0 ? '+' : '−'}{fmtSol(Math.abs(pnl))}◎
+                </em>
+              )}
+            </div>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
 
 // only rendered under PrivyProvider (privyEnabled + privy source) — the
 // hook must never run outside it
@@ -67,20 +158,7 @@ export default function WalletPage() {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     if (!address) return;
-    let ok = false;
-    try { await navigator.clipboard.writeText(address); ok = true; }
-    catch {
-      // embedded/older contexts deny the async API — legacy path still
-      // rides the click's user gesture
-      const ta = document.createElement('textarea');
-      ta.value = address;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      try { ok = document.execCommand('copy'); } catch { /* stays false */ }
-      ta.remove();
-    }
+    const ok = await copyText(address);
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -111,7 +189,20 @@ export default function WalletPage() {
     <main className="wrap wallet-page">
       <div className="panel">
         <h3>wallet</h3>
-        {w.who && <div className="kv"><span className="k">account</span><span className="mono">{w.who}</span></div>}
+        {w.who && (
+          <div className="whorow">
+            <span className="k">signed in as</span>
+            <span className="mono who-mail">{w.who}</span>
+            {w.source === 'privy' && w.logout && (
+              <button
+                className="btn ghost logout out"
+                onClick={async () => { await w.logout!(); router.push('/'); }}
+              >
+                <Glyph n="out" size={12} />Log out
+              </button>
+            )}
+          </div>
+        )}
         <div className="kv"><span className="k">network</span><span className="mono">Solana devnet</span></div>
         <div className="kv">
           <span className="k">balance</span>
@@ -132,20 +223,13 @@ export default function WalletPage() {
           <button className="btn ghost" onClick={copy}>{copied ? 'copied ✓' : 'Copy address'}</button>
           <a className="btn ghost" href={solscanAccount(address)} target="_blank" rel="noreferrer">View on Solscan</a>
           {privyEnabled && w.source === 'privy' && <ExportKeyButton address={address} />}
-          {w.source === 'privy' && w.logout && (
-            <button
-              className="btn ghost logout"
-              onClick={async () => { await w.logout!(); router.push('/'); }}
-            >
-              Log out
-            </button>
-          )}
         </div>
 
         <p className="faint keynote">
           Export opens Privy&apos;s own secure window — the key never touches this app.
         </p>
       </div>
+      {publicKey && <Holdings owner={publicKey} />}
       <p className="dim backrow"><Link className="linkish" href="/">← back to the board</Link></p>
     </main>
   );
