@@ -25,7 +25,9 @@ export default function Nav() {
     };
     tick();
     const t = setInterval(tick, 12000);
-    return () => { live = false; clearInterval(t); };
+    // every confirmed action pings this — the number moves the moment money does
+    window.addEventListener('magicpad:activity', tick);
+    return () => { live = false; clearInterval(t); window.removeEventListener('magicpad:activity', tick); };
   }, [publicKey]);
 
   const drop = async () => {
@@ -55,7 +57,9 @@ export default function Nav() {
       )}
       {mounted && w.source === 'privy' && (
         <span className="pill mono" title={publicKey?.toBase58()}>
-          {w.who ?? short(publicKey?.toBase58() ?? '')}
+          <Link href="/wallet" className="linkish">
+            {w.who ?? short(publicKey?.toBase58() ?? '')}
+          </Link>
           {w.logout && (
             <button className="linkish" onClick={() => w.logout!()} style={{ marginLeft: 8 }}>out</button>
           )}

@@ -162,3 +162,18 @@ input { font: inherit; }
   color: var(--magic); font: inherit;
 }
 .linkish:hover { text-decoration: underline; }
+
+/* ---- wallet page ---- */
+.wallet-page { max-width: 520px; padding-top: 22px; }
+.wallet-page .qr-tile { display: flex; justify-content: center; padding: 14px 0 6px; }
+.wallet-page .qr-tile img { border-radius: 10px; background: #fff; padding: 8px; }
+.wallet-page .addr-label { font-size: 11px; margin: 10px 0 4px; }
+.wallet-page .addr {
+  font-size: 12px; word-break: break-all; background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  user-select: all;
+}
+.wallet-page .wallet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.wallet-page .logout { color: var(--red); }
+.wallet-page .keynote { font-size: 11px; margin-top: 10px; }
+.wallet-page .backrow { margin-top: 12px; font-size: 12px; }
