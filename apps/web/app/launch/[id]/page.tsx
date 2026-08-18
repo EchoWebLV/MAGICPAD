@@ -11,6 +11,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { privyEnabled, useActiveWallet } from '../../../lib/use-active-wallet';
 import { PublicKey } from '@solana/web3.js';
 import CurveChart from '../../../components/CurveChart';
+import TokenArt from '../../../components/TokenArt';
+import {
+  LaunchMeta, attachMetaTx, clearMeta, pinAssets, resolveMeta, squashImage,
+} from '../../../lib/metadata';
 import {
   FIRST_WINDOW_MAX_BUY, GRADUATION_LAMPORTS, LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
   TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fetchLaunches, fmtSol, fmtTok, marketCapSol,
@@ -23,15 +27,15 @@ import {
   PositionView, buyLive, ensureTradeSession, readLaunchLive, readPosition, sellLive,
   topUpSession,
 } from '../../../lib/trade-live';
-import { walletBalance } from '../../../lib/wallet-tx';
+import { sendWithWallet, walletBalance } from '../../../lib/wallet-tx';
 
 interface Live {
-  name: string; symbol: string; state: number; dark: boolean; createdTs: number;
+  creator: string; name: string; symbol: string; state: number; dark: boolean; createdTs: number;
   virtualSol: bigint; virtualTok: bigint; realSolRaised: number; tokensSold: number;
   sessionsOpened: number; mint: string;
 }
 const toLive = (l: any, dark: boolean): Live => ({
-  name: l.name, symbol: l.symbol, state: l.state, dark,
+  creator: l.creator.toBase58(), name: l.name, symbol: l.symbol, state: l.state, dark,
   createdTs: l.createdTs.toNumber(),
   virtualSol: BigInt(l.virtualSol.toString()),
   virtualTok: BigInt(l.virtualTok.toString()),
@@ -62,6 +66,21 @@ export default function LaunchPage() {
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const [ok, setOk] = useState('');
+
+  // undefined = still resolving; null = this market has no face yet
+  const [meta, setMeta] = useState<LaunchMeta | null | undefined>(undefined);
+  const [attachImage, setAttachImage] = useState<File | null>(null);
+  const attachPreview = useMemo(
+    () => (attachImage ? URL.createObjectURL(attachImage) : ''), [attachImage],
+  );
+  const attachRef = useRef<HTMLInputElement>(null);
+  const creator = live?.creator ?? null;
+  useEffect(() => {
+    if (!Number.isInteger(id) || !creator) return;
+    let alive = true;
+    resolveMeta(id, creator).then((m) => { if (alive) setMeta(m); });
+    return () => { alive = false; };
+  }, [id, creator]);
 
   const refreshBal = useCallback(() => {
     if (!publicKey) { setBal(null); return; }
@@ -181,6 +200,26 @@ export default function LaunchPage() {
     setBusy('');
   };
 
+  const isCreator = publicKey !== null && publicKey.toBase58() === l.creator;
+  const doAttach = run('attach', async () => {
+    if (!publicKey || !attachImage) return;
+    const squashed = await squashImage(attachImage);
+    const cid = await pinAssets({
+      image: squashed, name: l.name, symbol: l.symbol,
+      description: '', twitter: '', telegram: '', website: '',
+    });
+    await sendWithWallet(wallet, attachMetaTx(id, publicKey, cid));
+    setAttachImage(null);
+    // the sig listing can lag the confirm by a beat — poll it in briefly
+    for (let i = 0; i < 5; i++) {
+      clearMeta(id);
+      const m = await resolveMeta(id, l.creator);
+      if (m) { setMeta(m); return; }
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+    setMeta(null); // landed but not indexed yet; the next visit picks it up
+  });
+
   const depositLamports = Math.round((Number.parseFloat(depositIn) || 0) * LAMPORTS);
   const chip = l.state === 0
     ? (l.dark ? <span className="chip dark">DARK</span> : <span className="chip">BONDING</span>)
@@ -192,16 +231,31 @@ export default function LaunchPage() {
       <div className="trade-grid">
         <section>
           <div className="panel">
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-              <span style={{ fontWeight: 700, fontSize: 18 }}>{l.name}</span>
-              <span className="mono magic">${l.symbol}</span>
-              {chip}
-              <a
-                className="mono faint" style={{ marginLeft: 'auto', fontSize: 11 }} title={l.mint}
-                href={`https://solscan.io/token/${l.mint}?cluster=devnet`} target="_blank" rel="noreferrer"
-              >
-                mint {short(l.mint)} ↗
-              </a>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <TokenArt id={id} creator={l.creator} symbol={l.symbol} size={46} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                  <span style={{ fontWeight: 700, fontSize: 18 }}>{l.name}</span>
+                  <span className="mono magic">${l.symbol}</span>
+                  {chip}
+                  <a
+                    className="mono faint" style={{ marginLeft: 'auto', fontSize: 11 }} title={l.mint}
+                    href={`https://solscan.io/token/${l.mint}?cluster=devnet`} target="_blank" rel="noreferrer"
+                  >
+                    mint {short(l.mint)} ↗
+                  </a>
+                </div>
+                {meta?.description && (
+                  <p className="dim" style={{ fontSize: 12, marginTop: 2 }}>{meta.description}</p>
+                )}
+                {(meta?.twitter || meta?.telegram || meta?.website) && (
+                  <div className="linkchips">
+                    {meta.twitter && <a href={meta.twitter} target="_blank" rel="noreferrer">twitter ↗</a>}
+                    {meta.telegram && <a href={meta.telegram} target="_blank" rel="noreferrer">telegram ↗</a>}
+                    {meta.website && <a href={meta.website} target="_blank" rel="noreferrer">website ↗</a>}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="kv" style={{ marginTop: 10 }}>
               <span className="k">market cap</span>
@@ -487,12 +541,40 @@ export default function LaunchPage() {
             </div>
           )}
 
+          {isCreator && meta === null && (
+            <div className="panel" style={{ marginTop: 12 }}>
+              <h3>give this market a face</h3>
+              <div className="imgpick">
+                <div className="drop" onClick={() => attachRef.current?.click()} title="pick an image">
+                  {attachPreview ? <img src={attachPreview} alt="token" /> : '+'}
+                </div>
+                <div className="hint">
+                  you launched this market before images existed —
+                  <br />pin one now and every board shows it
+                </div>
+                <input
+                  ref={attachRef} type="file" accept="image/*" style={{ display: 'none' }}
+                  onChange={(e) => setAttachImage(e.target.files?.[0] ?? null)}
+                />
+              </div>
+              <button className="btn" disabled={!attachImage || busy !== ''} onClick={doAttach}>
+                {busy === 'attach' ? 'attaching…' : 'Attach image'}
+              </button>
+              <p className="note">
+                pins to IPFS, then one wallet approval stamps the CID on-chain (fee only, no SOL moves)
+              </p>
+            </div>
+          )}
+
           {others && others.length > 0 && (
             <div className="panel" style={{ marginTop: 12 }}>
               <h3>more markets</h3>
               {others.slice(0, 5).map((o) => (
                 <Link key={o.id} href={`/launch/${o.id}`} className="kv">
-                  <span className="k">{o.name} <span className="mono faint">${o.symbol}</span></span>
+                  <span className="k" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <TokenArt id={o.id} creator={o.creator} symbol={o.symbol} size={22} />
+                    {o.name} <span className="mono faint">${o.symbol}</span>
+                  </span>
                   <span className="mono">{marketCapSol(o).toFixed(1)}◎</span>
                 </Link>
               ))}

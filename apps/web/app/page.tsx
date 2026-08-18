@@ -8,6 +8,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import TokenArt from '../components/TokenArt';
 import {
   GRADUATION_LAMPORTS, LaunchView, STATE, fetchLaunches, fmtAge, fmtSol, marketCapSol,
 } from '../lib/magicpad';
@@ -23,16 +24,21 @@ function Row({ l }: { l: LaunchView }) {
       : <span className="chip frozen">{STATE[l.state]}</span>;
   return (
     <Link href={`/launch/${l.id}`} className="row">
-      <div className="top">
-        <span className="name">{l.name}</span>
-        <span className="sym mono">${l.symbol}</span>
-        {chip}
-        <span className="age mono">{fmtAge(l.createdTs)}</span>
-      </div>
-      <div className="stats mono">
-        <span>MC <b>{marketCapSol(l).toFixed(1)}◎</b></span>
-        <span>raised <b>{fmtSol(l.realSolRaised)}◎</b></span>
-        <span>traders <b>{l.sessionsOpened}</b></span>
+      <div className="rowgrid">
+        <TokenArt id={l.id} creator={l.creator} symbol={l.symbol} size={40} />
+        <div className="rowbody">
+          <div className="top">
+            <span className="name">{l.name}</span>
+            <span className="sym mono">${l.symbol}</span>
+            {chip}
+            <span className="age mono">{fmtAge(l.createdTs)}</span>
+          </div>
+          <div className="stats mono">
+            <span>MC <b>{marketCapSol(l).toFixed(1)}◎</b></span>
+            <span>raised <b>{fmtSol(l.realSolRaised)}◎</b></span>
+            <span>traders <b>{l.sessionsOpened}</b></span>
+          </div>
+        </div>
       </div>
       <div className={`bar${pct >= 60 ? ' hot' : ''}`}><i style={{ width: `${pct}%` }} /></div>
     </Link>

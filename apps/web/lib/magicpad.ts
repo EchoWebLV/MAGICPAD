@@ -67,6 +67,7 @@ export const STATE = ['BONDING', 'FROZEN', 'RECONCILED', 'GRADUATED'] as const;
 
 export interface LaunchView {
   id: number;
+  creator: string;
   name: string;
   symbol: string;
   state: number;
@@ -83,6 +84,7 @@ export interface LaunchView {
 function toView(id: number, l: any, dark: boolean): LaunchView {
   return {
     id,
+    creator: (l.creator as PublicKey).toBase58(),
     name: l.name as string,
     symbol: l.symbol as string,
     state: l.state as number,
