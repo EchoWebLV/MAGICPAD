@@ -14,7 +14,7 @@ import CurveChart from '../../../components/CurveChart';
 import {
   FIRST_WINDOW_MAX_BUY, GRADUATION_LAMPORTS, LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
   TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fetchLaunches, fmtSol, fmtTok, marketCapSol,
-  sellQuote, short,
+  sellQuote, short, solscanAccount, solscanTx,
 } from '../../../lib/magicpad';
 import { HistRow, fetchHistory } from '../../../lib/history';
 import { buildCandles, replayMcap } from '../../../lib/replay';
@@ -179,9 +179,12 @@ export default function LaunchPage() {
               <span style={{ fontWeight: 700, fontSize: 18 }}>{l.name}</span>
               <span className="mono magic">${l.symbol}</span>
               {chip}
-              <span className="mono faint" style={{ marginLeft: 'auto', fontSize: 11 }} title={l.mint}>
-                mint {short(l.mint)}
-              </span>
+              <a
+                className="mono faint" style={{ marginLeft: 'auto', fontSize: 11 }} title={l.mint}
+                href={`https://solscan.io/token/${l.mint}?cluster=devnet`} target="_blank" rel="noreferrer"
+              >
+                mint {short(l.mint)} ↗
+              </a>
             </div>
             <div className="kv" style={{ marginTop: 10 }}>
               <span className="k">market cap</span>
@@ -274,10 +277,20 @@ export default function LaunchPage() {
                     {e.sol !== undefined ? `${fmtSol(e.sol, 4)}◎`
                       : e.tok !== undefined ? `${fmtTok(e.tok)} ${l.symbol}` : ''}
                   </span>
-                  <span className="dim" title={e.actor}>{short(e.actor)}</span>
-                  <span className="faint" style={{ marginLeft: 'auto' }}>
-                    {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })}
-                  </span>
+                  <a className="dim" title={e.actor} href={solscanAccount(e.actor)} target="_blank" rel="noreferrer">
+                    {short(e.actor)}
+                  </a>
+                  {e.er ? (
+                    <span className="faint" style={{ marginLeft: 'auto' }}
+                      title="dark trade: it lives on the rollup ledger, Solscan never sees it">
+                      {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })}
+                    </span>
+                  ) : (
+                    <a className="faint" style={{ marginLeft: 'auto' }} title="view tx on Solscan"
+                      href={solscanTx(e.sig)} target="_blank" rel="noreferrer">
+                      {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })} ↗
+                    </a>
+                  )}
                 </div>
               ))}
             </div>
@@ -295,9 +308,10 @@ export default function LaunchPage() {
                 const you = publicKey?.toBase58() === row.trader;
                 return (
                   <div className="t mono" key={row.trader}>
-                    <span className={you ? 'magic' : ''} title={row.trader}>
+                    <a className={you ? 'magic' : ''} title={row.trader}
+                      href={solscanAccount(row.trader)} target="_blank" rel="noreferrer">
                       {short(row.trader)}{you ? ' (you)' : ''}
-                    </span>
+                    </a>
                     <span>{fmtTok(row.pos.tokensHeld)} {l.symbol}</span>
                     <span className="faint">{supPct.toFixed(2)}% supply</span>
                     <span className={hn > 0 ? 'green' : hn < 0 ? 'red' : 'dim'} style={{ marginLeft: 'auto' }}>
@@ -392,7 +406,13 @@ export default function LaunchPage() {
                 >
                   {busy === 'buy' ? 'buying…' : `Buy ${l.symbol}`}
                 </button>
-                {buyLamports > avail && <p className="err">exceeds available escrow ({fmtSol(avail)}◎)</p>}
+                {buyLamports > avail && (
+                  <p className="err">
+                    only {fmtSol(avail)}◎ of your escrow is free. Buys spend from your{' '}
+                    {fmtSol(pos.deposit)}◎ deposit, sells refill it, and the rollup can never spend
+                    past it. Sell some {l.symbol} to free room.
+                  </p>
+                )}
               </div>
 
               <div className="panel" style={{ marginTop: 12 }}>

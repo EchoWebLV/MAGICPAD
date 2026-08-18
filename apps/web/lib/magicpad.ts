@@ -187,6 +187,9 @@ export function marketCapSol(l: LaunchView): number {
 }
 
 // ---- display helpers -------------------------------------------------------
+export const solscanAccount = (addr: string) => `https://solscan.io/account/${addr}?cluster=devnet`;
+export const solscanTx = (sig: string) => `https://solscan.io/tx/${sig}?cluster=devnet`;
+
 export const fmtSol = (lamports: number, dp = 3) => (lamports / LAMPORTS).toFixed(dp);
 export const fmtTok = (raw: number | bigint) =>
   (Number(raw) / 10 ** TOKEN_DECIMALS).toLocaleString('en-US', { maximumFractionDigits: 0 });
