@@ -57,6 +57,11 @@ export const program = new Program(
 
 export const decodeLaunch = (d: Buffer) => program.coder.accounts.decode('launch', d);
 export const decodeSession = (d: Buffer) => program.coder.accounts.decode('tradeSession', d);
+export const decodeTopUp = (d: Buffer) => program.coder.accounts.decode('topUp', d);
+export const TOPUP_DISCRIMINATOR = Buffer.from(
+  (idl as any).accounts.find((a: any) => a.name === 'TopUp').discriminator as number[],
+);
+export const TOPUP_SPACE = 66; // 8 disc + 8 launch_id + 32 trader + 8 nonce + 8 amount + 1 applied + 1 bump
 
 export const STATE = ['BONDING', 'FROZEN', 'RECONCILED', 'GRADUATED'] as const;
 

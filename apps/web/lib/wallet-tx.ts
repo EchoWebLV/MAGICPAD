@@ -14,6 +14,12 @@ export interface WalletLike {
   ) => Promise<TransactionSignature>;
 }
 
+/** Anything money-moving pings this; the nav (and anyone else) listens and
+ *  refreshes its numbers immediately instead of waiting out a poll tick. */
+export function notifyActivity(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('magicpad:activity'));
+}
+
 export async function sendWithWallet(wallet: WalletLike, tx: Transaction): Promise<string> {
   if (!wallet.publicKey) throw new Error('connect a wallet first');
   // pin the blockhash ourselves so the confirm window is the one the tx
@@ -25,12 +31,13 @@ export async function sendWithWallet(wallet: WalletLike, tx: Transaction): Promi
   try {
     const res = await connection.confirmTransaction({ signature: sig, ...bh }, 'confirmed');
     if (res.value.err) throw new Error(`transaction failed: ${JSON.stringify(res.value.err)}`);
+    notifyActivity();
     return sig;
   } catch (e: any) {
     if (!/expired|block height/i.test(String(e?.message ?? e))) throw e;
     // "expired" can lie — ask the chain once more before declaring death
     const st = (await connection.getSignatureStatus(sig, { searchTransactionHistory: true })).value;
-    if (st && !st.err && st.confirmationStatus) return sig;
+    if (st && !st.err && st.confirmationStatus) { notifyActivity(); return sig; }
     if (st?.err) throw new Error(`transaction failed: ${JSON.stringify(st.err)}`);
     // signed, broadcast, and devnet never saw it — the wallet almost
     // certainly sent it to a different network

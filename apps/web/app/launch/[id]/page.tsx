@@ -7,7 +7,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { privyEnabled, useActiveWallet } from '../../../lib/use-active-wallet';
 import { PublicKey } from '@solana/web3.js';
 import CurveChart from '../../../components/CurveChart';
@@ -72,25 +72,32 @@ export default function LaunchPage() {
   // the tick rides the ER (gasless node, generous limits); L1 only gets the
   // rare owner-flip check — public devnet 429s anything chattier. History
   // shares the tick: its ER sweep is cheap and its L1 sweep self-throttles.
+  // last good holder rows — a read hiccup must not blank someone's row
+  const holdersRef = useRef<Map<string, PositionView>>(new Map());
+
   const refresh = useCallback(async () => {
     if (!Number.isInteger(id)) return;
     const [r, p, h] = await Promise.all([
       readLaunchLive(id).catch(() => null),
-      publicKey ? readPosition(publicKey, id).catch(() => null) : Promise.resolve(null),
+      // undefined = the read FAILED this tick (ER hiccup); null = the chain
+      // positively says no session. Only the latter may clear the panel.
+      publicKey ? readPosition(publicKey, id).catch(() => undefined) : Promise.resolve(null),
       fetchHistory(id).catch(() => null),
     ]);
     if (r) setLive(toLive(r.l, r.dark));
     else if (r === null && live === null) setGone(true);
-    setPos(p);
+    if (p !== undefined) setPos(p);
     if (h) {
       setHist(h);
       // holders = every wallet that ever opened a session, read live from the ER
       const traders = [...new Set(h.filter((e) => e.kind === 'DEPOSIT').map((e) => e.actor))].slice(0, 20);
       const rows = (await Promise.all(traders.map(async (t) => {
-        const tp = await readPosition(new PublicKey(t), id).catch(() => null);
+        const tp = await readPosition(new PublicKey(t), id)
+          .catch(() => holdersRef.current.get(t) ?? null); // hold last known through hiccups
         return tp ? { trader: t, pos: tp } : null;
       }))).filter(Boolean) as { trader: string; pos: PositionView }[];
       rows.sort((x, y) => (y.pos.tokensHeld > x.pos.tokensHeld ? 1 : y.pos.tokensHeld < x.pos.tokensHeld ? -1 : 0));
+      holdersRef.current = new Map(rows.map((row) => [row.trader, row.pos]));
       setHolders(rows);
     }
   }, [id, live, publicKey]);
