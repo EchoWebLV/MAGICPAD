@@ -61,6 +61,20 @@ export default function LaunchPage() {
   }, [publicKey]);
   useEffect(() => { refreshBal(); }, [refreshBal]);
 
+  // dark markets have no public log to backfill from — what this browser
+  // witnessed is all there is, so it survives refreshes in localStorage
+  const feedKey = `magicpad_feed_${id}`;
+  useEffect(() => {
+    if (!Number.isInteger(id)) return;
+    try {
+      const arr = JSON.parse(localStorage.getItem(feedKey) ?? '[]');
+      if (Array.isArray(arr)) {
+        setFeed(arr.filter((t) => t && (t.side === 'BUY' || t.side === 'SELL')
+          && Number.isFinite(t.sol) && Number.isFinite(t.tok) && Number.isFinite(t.at)));
+      }
+    } catch { /* fresh feed */ }
+  }, [id, feedKey]);
+
   // the tick rides the ER (gasless node, generous limits); L1 only gets the
   // rare owner-flip check — public devnet 429s anything chattier
   const refresh = useCallback(async () => {
@@ -78,13 +92,17 @@ export default function LaunchPage() {
         const t: Tick = dTok > 0
           ? { side: 'BUY', sol: dSol, tok: dTok, at: Date.now() }
           : { side: 'SELL', sol: -dSol, tok: -dTok, at: Date.now() };
-        setFeed((f) => [t, ...f].slice(0, 40));
+        setFeed((f) => {
+          const nf = [t, ...f].slice(0, 40);
+          try { localStorage.setItem(feedKey, JSON.stringify(nf)); } catch { /* quota */ }
+          return nf;
+        });
       }
       prev.current = v;
       setLive(v);
     } else if (r === null && live === null) setGone(true);
     setPos(p);
-  }, [id, live, publicKey]);
+  }, [id, feedKey, live, publicKey]);
 
   useEffect(() => {
     refresh();
@@ -177,7 +195,13 @@ export default function LaunchPage() {
           <div className="panel" style={{ marginTop: 12 }}>
             <h3>curve activity <span className="faint">(implied from curve deltas — dark markets have no public trade log)</span></h3>
             <div className="feed">
-              {feed.length === 0 && <div className="empty" style={{ padding: 18 }}>watching the curve…</div>}
+              {feed.length === 0 && (
+                <div className="empty" style={{ padding: 18 }}>
+                  {l.tokensSold > 0
+                    ? `the curve moved before this terminal was watching: ${fmtTok(l.tokensSold)} ${l.symbol} sold, ${fmtSol(l.realSolRaised)}◎ in`
+                    : 'watching the curve…'}
+                </div>
+              )}
               {feed.map((t) => (
                 <div className="t mono" key={t.at + t.side}>
                   <span className={t.side === 'BUY' ? 'green' : 'red'}>{t.side}</span>
