@@ -2,15 +2,17 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { connection, fmtSol } from '../lib/magicpad';
+import { connection, fmtSol, short } from '../lib/magicpad';
+import { requestAirdrop } from '../lib/wallet-tx';
+import { privyEnabled, useActiveWallet } from '../lib/use-active-wallet';
 
 export default function Nav() {
-  const { publicKey } = useWallet();
+  const w = useActiveWallet();
+  const { publicKey } = w;
   const [bal, setBal] = useState<number | null>(null);
-  // the multi-button renders wallet state that only exists client-side —
-  // mount-gate it or hydration screams
+  const [dropping, setDropping] = useState(false);
+  // wallet state only exists client-side — mount-gate it or hydration screams
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
@@ -26,6 +28,14 @@ export default function Nav() {
     return () => { live = false; clearInterval(t); };
   }, [publicKey]);
 
+  const drop = async () => {
+    if (!publicKey || dropping) return;
+    setDropping(true);
+    try { await requestAirdrop(publicKey); setBal(await connection.getBalance(publicKey)); }
+    catch { /* faucet dry — the balance tick keeps polling */ }
+    setDropping(false);
+  };
+
   return (
     <nav className="nav">
       <Link href="/" className="brand">MAGIC<span>PAD</span></Link>
@@ -34,7 +44,24 @@ export default function Nav() {
       {publicKey && bal !== null && (
         <span className="pill mono"><span className="magic">◈</span> {fmtSol(bal, 3)}◎</span>
       )}
-      {mounted && <WalletMultiButton />}
+      {/* fresh embedded wallets start empty — hand them devnet SOL in place */}
+      {mounted && w.source === 'privy' && bal !== null && bal < 20_000_000 && (
+        <button className="pill mono" onClick={drop} disabled={dropping}>
+          {dropping ? 'dropping…' : '+1◎ devnet'}
+        </button>
+      )}
+      {mounted && privyEnabled && !w.privyAuthed && w.login && (
+        <button className="btn" onClick={w.login} disabled={!w.privyReady}>Log in</button>
+      )}
+      {mounted && w.source === 'privy' && (
+        <span className="pill mono" title={publicKey?.toBase58()}>
+          {w.who ?? short(publicKey?.toBase58() ?? '')}
+          {w.logout && (
+            <button className="linkish" onClick={() => w.logout!()} style={{ marginLeft: 8 }}>out</button>
+          )}
+        </span>
+      )}
+      {mounted && w.source !== 'privy' && <WalletMultiButton />}
       <Link href="/create" className="btn">+ Launch</Link>
     </nav>
   );

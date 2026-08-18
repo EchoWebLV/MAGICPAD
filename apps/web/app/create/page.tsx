@@ -7,7 +7,7 @@
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { BN } from '@coral-xyz/anchor';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useActiveWallet } from '../../lib/use-active-wallet';
 import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import {
   DLP, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, fmtSol, launchPda, mintPda, program,
@@ -28,7 +28,7 @@ const delegationMetas = (target: PublicKey) => {
 
 export default function Create() {
   const router = useRouter();
-  const wallet = useWallet();
+  const wallet = useActiveWallet();
   const { publicKey } = wallet;
   const [name, setName] = useState('');
   const [symbol, setSymbol] = useState('');

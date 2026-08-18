@@ -156,3 +156,9 @@ input { font: inherit; }
   .col { min-height: unset; }
   .trade-grid { grid-template-columns: 1fr; }
 }
+
+.linkish {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--magic); font: inherit;
+}
+.linkish:hover { text-decoration: underline; }

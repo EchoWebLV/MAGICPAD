@@ -14,7 +14,7 @@ import { PROGRAM_ID, connection, erConnection, erEndpointFor, launchPda } from '
 import idl from './idl.json';
 
 export type HistKind =
-  | 'LAUNCH' | 'DEPOSIT' | 'BUY' | 'SELL'
+  | 'LAUNCH' | 'DEPOSIT' | 'TOPUP' | 'BUY' | 'SELL'
   | 'FREEZE' | 'SETTLED' | 'CLAIM' | 'RAKEBACK' | 'GRADUATED';
 
 export interface HistEvent {
@@ -60,6 +60,7 @@ function parseTx(tx: any, sig: string, er: boolean, c: Cache): HistEvent | null 
       case 'open_trade_session':
         c.sk[a.session_key.toBase58()] = signer;
         return { sig, at, er, kind: 'DEPOSIT', signer, sol: bnNum(a.deposit) };
+      case 'top_up_session': return { sig, at, er, kind: 'TOPUP', signer, sol: bnNum(a.amount) };
       case 'buy': return { sig, at, er, kind: 'BUY', signer, sol: bnNum(a.amount_in) };
       case 'sell': return { sig, at, er, kind: 'SELL', signer, tok: bnNum(a.tokens_in) };
       case 'freeze_launch': return { sig, at, er, kind: 'FREEZE', signer };

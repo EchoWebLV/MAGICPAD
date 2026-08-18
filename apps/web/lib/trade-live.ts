@@ -13,7 +13,7 @@ import {
 } from '@solana/web3.js';
 import {
   DLP, PROGRAM_ID, connection, decodeLaunch, decodeSession, erConnection,
-  erEndpointFor, launchPda, program, sessionPda,
+  erEndpointFor, launchPda, program, sessionPda, topupPda,
 } from './magicpad';
 import { WalletLike, sendWithWallet } from './wallet-tx';
 
@@ -75,6 +75,41 @@ export async function ensureTradeSession(wallet: WalletLike, id: number, deposit
   );
   await withL1Retry(() => sendWithWallet(wallet, tx));
   return session;
+}
+
+/** Raise the escrow ceiling mid-session. One L1 signature escrows the
+ *  lamports in a nonce-seeded note and delegates it; the session key then
+ *  consumes the note on the ER and the deposit the buys check against
+ *  grows. Resolves once the ceiling has actually moved. */
+export async function topUpSession(wallet: WalletLike, id: number, lamports: number): Promise<void> {
+  const trader = wallet.publicKey;
+  if (!trader) throw new Error('connect a wallet first');
+  const nonce = Date.now();
+  const note = topupPda(id, trader, nonce);
+  const session = sessionPda(id, trader);
+  const launch = launchPda(id);
+  const tx = new Transaction().add(
+    await program.methods.topUpSession(new BN(id), new BN(nonce), new BN(lamports)).accountsPartial({
+      trader, session, launch, note, systemProgram: SystemProgram.programId,
+    }).instruction(),
+    await program.methods.delegateTopUp(new BN(id), new BN(nonce)).accountsPartial({
+      payer: trader, note, ...delegationMetas(note, 'Note'),
+    }).instruction(),
+  );
+  await withL1Retry(() => sendWithWallet(wallet, tx));
+
+  // the ER clones the note lazily off the fresh delegation — apply can race
+  // that by a beat, so retry with a short backoff before giving up
+  const sk = sessionKeyFor(id, trader);
+  const applyIx = await program.methods.applyTopUp(new BN(nonce)).accountsPartial({
+    sessionSigner: sk.publicKey, session, launch, note,
+  }).instruction();
+  let lastErr: unknown = null;
+  for (let i = 0; i < 6; i++) {
+    try { await sendSessionTx(id, trader, applyIx); return; }
+    catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 700 * (i + 1))); }
+  }
+  throw new Error(`escrow raised on L1 but the rollup hasn't applied it yet — retry the buy in a moment (${String((lastErr as any)?.message ?? lastErr).slice(0, 80)})`);
 }
 
 /* The launch owner flips DLP↔program only at delegation boundaries, so the

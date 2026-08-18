@@ -8,6 +8,204 @@
   },
   "instructions": [
     {
+      "name": "absorb_top_up",
+      "discriminator": [
+        164,
+        88,
+        54,
+        40,
+        6,
+        178,
+        88,
+        205
+      ],
+      "accounts": [
+        {
+          "name": "trader",
+          "writable": true
+        },
+        {
+          "name": "session",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "note.launch_id",
+                "account": "TopUp"
+              },
+              {
+                "kind": "account",
+                "path": "note.trader",
+                "account": "TopUp"
+              }
+            ]
+          }
+        },
+        {
+          "name": "note",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  112,
+                  117,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "note.launch_id",
+                "account": "TopUp"
+              },
+              {
+                "kind": "account",
+                "path": "note.trader",
+                "account": "TopUp"
+              },
+              {
+                "kind": "account",
+                "path": "note.nonce",
+                "account": "TopUp"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "apply_top_up",
+      "discriminator": [
+        138,
+        192,
+        82,
+        119,
+        230,
+        17,
+        120,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "session_signer",
+          "docs": [
+            "NOT the wallet — the throwaway key open_trade_session pinned."
+          ],
+          "signer": true
+        },
+        {
+          "name": "session",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "session.launch_id",
+                "account": "TradeSession"
+              },
+              {
+                "kind": "account",
+                "path": "session.trader",
+                "account": "TradeSession"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "note",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  112,
+                  117,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "session.launch_id",
+                "account": "TradeSession"
+              },
+              {
+                "kind": "account",
+                "path": "session.trader",
+                "account": "TradeSession"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "buy",
       "discriminator": [
         102,
@@ -807,6 +1005,212 @@
       "args": [
         {
           "name": "launch_id",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "delegate_top_up",
+      "discriminator": [
+        36,
+        235,
+        127,
+        216,
+        59,
+        145,
+        20,
+        87
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "buffer_note",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "note"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                16,
+                119,
+                147,
+                125,
+                164,
+                100,
+                180,
+                212,
+                206,
+                241,
+                2,
+                115,
+                195,
+                109,
+                128,
+                110,
+                12,
+                189,
+                7,
+                19,
+                12,
+                8,
+                157,
+                48,
+                49,
+                203,
+                194,
+                221,
+                237,
+                64,
+                238,
+                86
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_note",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "note"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_note",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "note"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "note",
+          "docs": [
+            "re-serialize after ownership moves to the delegation program."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  112,
+                  117,
+                  112
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "launch_id"
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner_program",
+          "address": "27HH4WUhKMmkza5NTpAjwhHkRwiPotPw55HxvjDRDsws"
+        },
+        {
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "launch_id",
+          "type": "u64"
+        },
+        {
+          "name": "nonce",
           "type": "u64"
         }
       ]
@@ -1671,6 +2075,133 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "top_up_session",
+      "discriminator": [
+        38,
+        46,
+        22,
+        233,
+        201,
+        167,
+        226,
+        28
+      ],
+      "accounts": [
+        {
+          "name": "trader",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "session",
+          "docs": [
+            "check can pass. Seeds pin the address; the L1 snapshot (data is",
+            "preserved under delegation) proves it exists and belongs to the",
+            "signer before any lamports move."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "launch_id"
+              },
+              {
+                "kind": "account",
+                "path": "trader"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch",
+          "docs": [
+            "only be stale toward FROZEN; worst case the note escrows, the ER",
+            "refuses it, and absorb refunds every lamport."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "launch_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "note",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  112,
+                  117,
+                  112
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "launch_id"
+              },
+              {
+                "kind": "account",
+                "path": "trader"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "launch_id",
+          "type": "u64"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1711,6 +2242,19 @@
         214,
         232,
         135
+      ]
+    },
+    {
+      "name": "TopUp",
+      "discriminator": [
+        148,
+        178,
+        79,
+        110,
+        42,
+        198,
+        178,
+        25
       ]
     },
     {
@@ -1817,6 +2361,11 @@
       "code": 6017,
       "name": "PotNotReady",
       "msg": "pot not funded yet — retry after loser sessions reconcile"
+    },
+    {
+      "code": 6018,
+      "name": "AlreadyApplied",
+      "msg": "top-up already applied"
     }
   ],
   "types": [
@@ -1913,6 +2462,38 @@
       "type": {
         "kind": "struct",
         "fields": []
+      }
+    },
+    {
+      "name": "TopUp",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "launch_id",
+            "type": "u64"
+          },
+          {
+            "name": "trader",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "applied",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
       }
     },
     {

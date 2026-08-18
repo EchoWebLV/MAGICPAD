@@ -8,7 +8,7 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { privyEnabled, useActiveWallet } from '../../../lib/use-active-wallet';
 import { PublicKey } from '@solana/web3.js';
 import CurveChart from '../../../components/CurveChart';
 import {
@@ -21,6 +21,7 @@ import { buildCandles, replayMcap } from '../../../lib/replay';
 import { getSolUsd } from '../../../lib/usd';
 import {
   PositionView, buyLive, ensureTradeSession, readLaunchLive, readPosition, sellLive,
+  topUpSession,
 } from '../../../lib/trade-live';
 import { walletBalance } from '../../../lib/wallet-tx';
 
@@ -43,7 +44,7 @@ const toLive = (l: any, dark: boolean): Live => ({
 export default function LaunchPage() {
   const { id: idParam } = useParams<{ id: string }>();
   const id = Number.parseInt(idParam ?? '', 10);
-  const wallet = useWallet();
+  const wallet = useActiveWallet();
   const { publicKey } = wallet;
 
   const [live, setLive] = useState<Live | null>(null);
@@ -128,7 +129,7 @@ export default function LaunchPage() {
     for (const e of hist) {
       if (e.kind === 'BUY') { s.buys += 1; s.buyVol += e.sol ?? 0; b.add(e.actor); }
       else if (e.kind === 'SELL') { s.sells += 1; s.sellVol += rep.solOfSig[e.sig] ?? 0; sl.add(e.actor); }
-      else if (e.kind === 'DEPOSIT') s.deposited += e.sol ?? 0;
+      else if (e.kind === 'DEPOSIT' || e.kind === 'TOPUP') s.deposited += e.sol ?? 0;
     }
     s.buyers = b.size; s.sellers = sl.size;
     return s;
@@ -153,6 +154,10 @@ export default function LaunchPage() {
 
   const buyLamports = Math.round((Number.parseFloat(buyIn) || 0) * LAMPORTS);
   const buyOut = buyLamports > 0 ? buyQuote(l.virtualSol, l.virtualTok, BigInt(buyLamports)) : 0n;
+  // a buy past the free escrow tops the escrow up from the wallet first —
+  // the program floor for a top-up is MIN_DEPOSIT
+  const shortfall = pos && buyLamports > avail ? Math.max(buyLamports - avail, MIN_DEPOSIT) : 0;
+  const walletCovers = bal !== null && bal >= shortfall + 5e6; // margin for fees + note rent
   const sellRawWanted = BigInt(Math.round((Number.parseFloat(sellIn) || 0) * 10 ** TOKEN_DECIMALS));
   const sellRaw = pos && sellRawWanted > pos.tokensHeld ? pos.tokensHeld : sellRawWanted;
   const sellOut = sellRaw > 0n ? sellQuote(l.virtualSol, l.virtualTok, sellRaw) : 0n;
@@ -270,8 +275,8 @@ export default function LaunchPage() {
               )}
               {hist?.map((e) => (
                 <div className="t mono" key={e.sig}>
-                  <span className={e.kind === 'BUY' ? 'green' : e.kind === 'SELL' ? 'red' : e.kind === 'DEPOSIT' ? 'magic' : 'faint'}>
-                    {e.kind}
+                  <span className={e.kind === 'BUY' ? 'green' : e.kind === 'SELL' ? 'red' : e.kind === 'DEPOSIT' || e.kind === 'TOPUP' ? 'magic' : 'faint'}>
+                    {e.kind === 'TOPUP' ? 'TOP-UP' : e.kind}
                   </span>
                   <span>
                     {e.sol !== undefined ? `${fmtSol(e.sol, 4)}◎`
@@ -329,8 +334,9 @@ export default function LaunchPage() {
             <div className="panel">
               <h3>trade this market</h3>
               <p className="note" style={{ marginTop: 0 }}>
-                Connect a wallet (top right) to open a session. One approval escrows your stake;
-                every trade after that is gasless — no popups, no fees.
+                {privyEnabled ? 'Log in or connect a wallet' : 'Connect a wallet'} (top right)
+                to open a session. One approval escrows your stake; every trade after that is
+                gasless — no popups, no fees.
               </p>
             </div>
           )}
@@ -401,16 +407,29 @@ export default function LaunchPage() {
                   <span className="mono green">{fmtTok(buyOut)} {l.symbol}</span></div>
                 <button
                   className="btn buy" style={{ width: '100%', marginTop: 6 }}
-                  disabled={!!busy || !publicKey || buyLamports <= 0 || buyLamports > avail}
-                  onClick={run('buy', () => buyLive(publicKey!, id, buyLamports))}
+                  disabled={!!busy || !publicKey || buyLamports <= 0 || (shortfall > 0 && !walletCovers)}
+                  onClick={run('buy', async () => {
+                    if (shortfall > 0) {
+                      setBusy('top-up');
+                      await topUpSession(wallet, id, shortfall);
+                      setBusy('buy');
+                    }
+                    await buyLive(publicKey!, id, buyLamports);
+                  })}
                 >
-                  {busy === 'buy' ? 'buying…' : `Buy ${l.symbol}`}
+                  {busy === 'top-up' ? 'raising escrow…' : busy === 'buy' ? 'buying…' : `Buy ${l.symbol}`}
                 </button>
-                {buyLamports > avail && (
+                {shortfall > 0 && walletCovers && (
+                  <p className="note">
+                    bigger than your free escrow ({fmtSol(avail)}◎) — this buy moves{' '}
+                    {fmtSol(shortfall)}◎ from your wallet into the escrow first, then runs
+                    gasless as usual.
+                  </p>
+                )}
+                {shortfall > 0 && !walletCovers && (
                   <p className="err">
-                    only {fmtSol(avail)}◎ of your escrow is free. Buys spend from your{' '}
-                    {fmtSol(pos.deposit)}◎ deposit, sells refill it, and the rollup can never spend
-                    past it. Sell some {l.symbol} to free room.
+                    {bal === null ? 'connect a wallet' : `your wallet holds ${fmtSol(bal)}◎`} — this
+                    buy needs {fmtSol(shortfall)}◎ on top of your free {fmtSol(avail)}◎ escrow.
                   </p>
                 )}
               </div>

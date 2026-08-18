@@ -40,6 +40,9 @@ export const mintPda = (id: number) =>
   pda(Buffer.from('mint'), new BN(id).toArrayLike(Buffer, 'le', 8));
 export const sessionPda = (id: number, trader: PublicKey) =>
   pda(Buffer.from('tsession'), new BN(id).toArrayLike(Buffer, 'le', 8), trader.toBuffer());
+export const topupPda = (id: number, trader: PublicKey, nonce: number) =>
+  pda(Buffer.from('topup'), new BN(id).toArrayLike(Buffer, 'le', 8), trader.toBuffer(),
+    new BN(nonce).toArrayLike(Buffer, 'le', 8));
 
 // read-only program — tx building + decode only, never signs
 const deadWallet = {
