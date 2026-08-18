@@ -25,7 +25,7 @@ import { Connection, PublicKey, Transaction, TransactionSignature } from '@solan
 import { useWallet } from '@solana/wallet-adapter-react';
 import { usePrivy } from '@privy-io/react-auth';
 import {
-  useSignTransaction, useWallets as usePrivySolanaWallets,
+  useSignMessage, useSignTransaction, useWallets as usePrivySolanaWallets,
 } from '@privy-io/react-auth/solana';
 import type { WalletLike } from './wallet-tx';
 
@@ -56,14 +56,16 @@ function useAdapterOnly(): ActiveWallet {
     ...dead,
     publicKey: adapter.publicKey,
     sendTransaction: adapter.sendTransaction,
+    signMessage: adapter.signMessage,
     source: adapter.publicKey ? ('adapter' as const) : null,
-  }), [adapter.publicKey, adapter.sendTransaction]);
+  }), [adapter.publicKey, adapter.sendTransaction, adapter.signMessage]);
 }
 
 function useWithPrivy(): ActiveWallet {
   const adapter = useWallet();
   const { ready, authenticated, user, login, logout } = usePrivy();
   const { signTransaction } = useSignTransaction();
+  const { signMessage } = useSignMessage();
   const { wallets } = usePrivySolanaWallets();
 
   // the embedded wallet is the one carrying Privy's own feature
@@ -73,8 +75,8 @@ function useWithPrivy(): ActiveWallet {
   );
   const embeddedAddress = embedded?.address ?? null;
 
-  const volatile = useRef({ embedded, signTransaction, login, logout });
-  volatile.current = { embedded, signTransaction, login, logout };
+  const volatile = useRef({ embedded, signTransaction, signMessage, login, logout });
+  volatile.current = { embedded, signTransaction, signMessage, login, logout };
 
   const stableLogin = useCallback(() => { volatile.current.login(); }, []);
   const stableLogout = useCallback(async () => { await volatile.current.logout(); }, []);
@@ -100,6 +102,15 @@ function useWithPrivy(): ActiveWallet {
     });
   }, []);
 
+  // deterministic per (message, key) — every browser derives the same
+  // trade keys from it, headless because showWalletUIs is off
+  const privySignMessage = useCallback(async (message: Uint8Array): Promise<Uint8Array> => {
+    const { embedded: w, signMessage: sign } = volatile.current;
+    if (!w) throw new Error('Privy embedded wallet not ready');
+    const { signature } = await sign({ message, wallet: w });
+    return signature;
+  }, []);
+
   const who = user?.email?.address
     ?? user?.google?.email
     ?? user?.twitter?.username
@@ -109,7 +120,8 @@ function useWithPrivy(): ActiveWallet {
   return useMemo(() => {
     if (authenticated && privyPk) {
       return {
-        publicKey: privyPk, sendTransaction: privySend, source: 'privy' as const, who,
+        publicKey: privyPk, sendTransaction: privySend, signMessage: privySignMessage,
+        source: 'privy' as const, who,
         privyReady: ready, privyAuthed: true, login: stableLogin, logout: stableLogout,
       };
     }
@@ -117,11 +129,12 @@ function useWithPrivy(): ActiveWallet {
       ...dead,
       publicKey: adapter.publicKey,
       sendTransaction: adapter.sendTransaction,
+      signMessage: adapter.signMessage,
       source: adapter.publicKey ? ('adapter' as const) : null,
       privyReady: ready, privyAuthed: authenticated, login: stableLogin, logout: stableLogout,
     };
-  }, [authenticated, privyPk, privySend, who, ready, stableLogin, stableLogout,
-    adapter.publicKey, adapter.sendTransaction]);
+  }, [authenticated, privyPk, privySend, privySignMessage, who, ready, stableLogin, stableLogout,
+    adapter.publicKey, adapter.sendTransaction, adapter.signMessage]);
 }
 
 export const useActiveWallet: () => ActiveWallet = privyEnabled ? useWithPrivy : useAdapterOnly;

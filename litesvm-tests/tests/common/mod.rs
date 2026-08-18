@@ -293,6 +293,24 @@ pub fn sell_ix(session_key: &Address, trader: &Address, launch_id: u64, tokens_i
     }
 }
 
+/// the WALLET signs — not the session key. `signer` and `owner` split so
+/// tests can point a stranger's signature at someone else's session.
+pub fn rotate_session_key_ix(
+    signer: &Address,
+    owner: &Address,
+    launch_id: u64,
+    new_key: &Address,
+) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(*signer, true),
+            AccountMeta::new(session_pda(launch_id, owner), false),
+        ],
+        data: ix_data("rotate_session_key", &new_key.to_bytes()),
+    }
+}
+
 #[derive(borsh::BorshSerialize)]
 pub struct TopUpSessionArgs {
     pub launch_id: u64,

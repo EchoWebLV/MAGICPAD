@@ -70,6 +70,10 @@ pub mod magicpad {
     }
 
     // -- escrow top-ups: the ceiling that grows mid-session --
+    pub fn rotate_session_key(ctx: Context<RotateSessionKey>, new_key: Pubkey) -> Result<()> {
+        instructions::session::rotate_session_key_handler(ctx, new_key)
+    }
+
     pub fn top_up_session(
         ctx: Context<TopUpSession>,
         launch_id: u64,

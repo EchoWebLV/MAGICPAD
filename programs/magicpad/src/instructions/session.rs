@@ -90,6 +90,38 @@ pub fn open_trade_session_handler(
     Ok(())
 }
 
+// ---- rotate_session_key (ER, the trader). The session key is minted by
+// whichever browser opened the session — a second browser (or a wiped
+// localStorage) holds a different key and every trade bounces with
+// SessionKeyMismatch. The wallet itself signs here, so the rightful trader
+// can re-point the session at the key their current browser holds. Runs in
+// the ER while the session is delegated (the wallet is just a read-only
+// signer, fees are zero); no state gate — after settlement the key is
+// meaningless anyway. ----
+#[derive(Accounts)]
+pub struct RotateSessionKey<'info> {
+    /// the WALLET — the only party allowed to swap trade keys
+    pub trader: Signer<'info>,
+
+    #[account(mut,
+        seeds = [SESSION_SEED, session.launch_id.to_le_bytes().as_ref(), session.trader.as_ref()],
+        bump = session.bump,
+        constraint = session.trader == trader.key() @ MagicPadError::Unauthorized)]
+    pub session: Box<Account<'info, TradeSession>>,
+}
+
+pub fn rotate_session_key_handler(
+    ctx: Context<RotateSessionKey>,
+    new_key: Pubkey,
+) -> Result<()> {
+    require!(
+        new_key != Pubkey::default(),
+        MagicPadError::SessionKeyMismatch
+    );
+    ctx.accounts.session.session_key = new_key;
+    Ok(())
+}
+
 // ---- delegate_trade_session (L1, the trader — bundled right after open).
 // Payer-gated by construction: the seeds bind the PDA to the payer, so a
 // stranger can't delegate someone else's session out from under them. ----

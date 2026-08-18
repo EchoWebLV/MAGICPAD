@@ -421,7 +421,7 @@ export default function LaunchPage() {
                       await topUpSession(wallet, id, shortfall);
                       setBusy('buy');
                     }
-                    await buyLive(publicKey!, id, buyLamports);
+                    await buyLive(wallet, id, buyLamports);
                   })}
                 >
                   {busy === 'top-up' ? 'raising escrow…' : busy === 'buy' ? 'buying…' : `Buy ${l.symbol}`}
@@ -466,7 +466,7 @@ export default function LaunchPage() {
                 <button
                   className="btn sell" style={{ width: '100%', marginTop: 6 }}
                   disabled={!!busy || !publicKey || sellRaw <= 0n || pos.tokensHeld === 0n}
-                  onClick={run('sell', () => sellLive(publicKey!, id, sellRaw.toString()))}
+                  onClick={run('sell', () => sellLive(wallet, id, sellRaw.toString()))}
                 >
                   {busy === 'sell' ? 'selling…' : `Sell ${l.symbol}`}
                 </button>

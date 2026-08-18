@@ -1994,6 +1994,65 @@
       "args": []
     },
     {
+      "name": "rotate_session_key",
+      "discriminator": [
+        141,
+        28,
+        137,
+        234,
+        221,
+        140,
+        7,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "trader",
+          "docs": [
+            "the WALLET — the only party allowed to swap trade keys"
+          ],
+          "signer": true
+        },
+        {
+          "name": "session",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "session.launch_id",
+                "account": "TradeSession"
+              },
+              {
+                "kind": "account",
+                "path": "session.trader",
+                "account": "TradeSession"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_key",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "sell",
       "discriminator": [
         51,

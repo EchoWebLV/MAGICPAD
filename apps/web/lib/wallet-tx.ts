@@ -12,6 +12,9 @@ export interface WalletLike {
   sendTransaction: (
     tx: Transaction, connection: Connection, options?: { maxRetries?: number },
   ) => Promise<TransactionSignature>;
+  /** plain ed25519 message signature — deterministic, so it derives the
+   *  SAME trade keys in every browser the wallet logs into */
+  signMessage?: (message: Uint8Array) => Promise<Uint8Array>;
 }
 
 /** Anything money-moving pings this; the nav (and anyone else) listens and
