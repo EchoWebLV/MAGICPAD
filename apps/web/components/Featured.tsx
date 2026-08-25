@@ -140,7 +140,7 @@ export default function Featured({ items, loading }: { items: LaunchView[]; load
               key={l.id} className={`fbg${i === idx ? ' on' : ''}`}
               style={img
                 ? { backgroundImage: `url(${img})` }
-                : { background: `linear-gradient(${(l.id * 137.5) % 360}deg, rgba(255,199,0,0.5), transparent 66%)` }}
+                : { background: `linear-gradient(${(l.id * 137.5) % 360}deg, rgba(200,245,66,0.45), transparent 66%)` }}
             />
           );
         })}
@@ -167,7 +167,7 @@ export default function Featured({ items, loading }: { items: LaunchView[]; load
             <span className="mono faint">{fmtAge(cur.createdTs)} old</span>
             <span className="mono faint">market {pad(cur.id)}</span>
           </div>
-          <Link href={`/launch/${cur.id}`} className="fname">{cur.name}</Link>
+          <Link href={`/launch/${cur.mint}`} className="fname">{cur.name}</Link>
           <p className="fdesc">{desc || `Bonding on the curve. ${cur.sessionsOpened} traders in so far.`}</p>
           <div className="fnums">
             <span><b className="mono">{marketCapSol(cur).toFixed(1)}◎</b><em>market cap</em></span>
@@ -176,13 +176,13 @@ export default function Featured({ items, loading }: { items: LaunchView[]; load
           </div>
           <div className={`bar${pct >= 60 ? ' hot' : ''}`}><i style={{ width: `${pct}%` }} /></div>
           <div className="fgo">
-            <Link href={`/launch/${cur.id}`} className="btn">Trade ${cur.symbol}</Link>
+            <Link href={`/launch/${cur.mint}`} className="btn">Trade ${cur.symbol}</Link>
             <span className="mono faint">{pct.toFixed(0)}% of the way to graduation</span>
           </div>
         </div>
         <div className="fartwrap">
           <span className="fghost" aria-hidden="true">{cur.symbol}</span>
-          <Link href={`/launch/${cur.id}`} className="fart" aria-label={cur.name}>
+          <Link href={`/launch/${cur.mint}`} className="fart" aria-label={cur.name}>
             <TokenArt id={cur.id} creator={cur.creator} symbol={cur.symbol} size={240} />
           </Link>
         </div>

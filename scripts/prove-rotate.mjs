@@ -141,7 +141,7 @@ console.log('\n━━ PHASE 1 · open a session with key A (L1) ━━');
 await waitForCrest(Math.floor(0.2 * LAMPORTS_PER_SOL), 'escrow + fees');
 await sendL1([
   await program.methods.openTradeSession(new BN(id), keyA.publicKey, new BN(DEP)).accountsPartial({
-    trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId,
+    trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId, gateSigner: wallet.publicKey,
   }).instruction(),
   await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
     payer: wallet.publicKey, session, ...delegationMetas(session, 'Session'),

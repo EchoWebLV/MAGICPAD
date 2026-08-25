@@ -9,7 +9,6 @@
 //       lands — nobody drains an unfunded pot
 //     - conservation to the lamport: net1 − profit2 == real_sol_raised ==
 //       measured pot delta
-//     - the loser's rakeback actually PAYS (10% of realized loss)
 //     - claim_tokens mints the first real SPL this token has ever seen
 //
 //   node scripts/demo-trader.mjs auto          # new launch, full pipeline
@@ -52,7 +51,7 @@ const program = new Program(idl, provider);
 const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 const le8 = (n) => new BN(n).toArrayLike(Buffer, 'le', 8);
 const PLATFORM = pda(Buffer.from('platform'));
-const RAKEBACK = pda(Buffer.from('rakeback'));
+const CONFIG = pda(Buffer.from('config'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
 const sessionPda = (id, trader) => pda(Buffer.from('tsession'), le8(id), trader.toBuffer());
@@ -178,7 +177,7 @@ async function runPipeline(id) {
   console.log('\n━━ PHASE 2 · two traders, ONE approval each (L1) ━━');
   const openAndDelegate = async (trader, session, sk, dep, who) => sendL1([
     await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(dep)).accountsPartial({
-      trader: trader.publicKey, session, launch, systemProgram: SystemProgram.programId,
+      trader: trader.publicKey, session, launch, systemProgram: SystemProgram.programId, gateSigner: trader.publicKey,
     }).instruction(),
     await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
       payer: trader.publicKey, session, ...delegationMetas(session, 'Session'),
@@ -218,7 +217,6 @@ async function runPipeline(id) {
     if (lState.state === 0) {
       const t0 = Date.now();
       let steps = 0;
-      // both buys sit under the 0.5◎ first-window anti-whale cap
       if ((await erSession(s2)).solSpent.isZero()) {
         await sendEr(er, [await tradeIx('buy', Math.floor(0.35 * LAMPORTS_PER_SOL), s2, sk2)], sk2, 'trader2 pump');
         console.log('  trader2 pumps 0.35◎ (gasless)'); steps++;
@@ -246,7 +244,7 @@ async function runPipeline(id) {
     console.log(`  wallet  ledger: spent ${sol(e1.solSpent)} proceeds ${sol(e1.solProceeds)} held ${e1.tokensHeld} realized_loss ${sol(e1.realizedLoss)}`);
     console.log(`  trader2 ledger: spent ${sol(e2.solSpent)} proceeds ${sol(e2.solProceeds)} held ${e2.tokensHeld} (profit ${sol(e2.solProceeds.sub(e2.solSpent))})`);
     console.log(`  curve: raised ${sol(lState.realSolRaised)} sold ${lState.tokensSold} sessions ${lState.sessionsOpened}`);
-    assert(e1.realizedLoss.gtn(0), 'wallet realized a real loss (rakeback will owe)');
+    assert(e1.realizedLoss.gtn(0), 'wallet realized a real loss');
     assert(e2.solProceeds.gt(e2.solSpent), 'trader2 is a net winner (pot will owe)');
     const l1Launch = await conn.getAccountInfo(launch);
     const l1Mint = await conn.getTokenSupply(mint);
@@ -335,17 +333,6 @@ async function runPipeline(id) {
     `SPL balance ${bal.value.uiAmountString} DARK == ledger tokens_held`);
   console.log('  trader2 sold everything — no token claim to make');
 
-  if (!h1.rakebackClaimed) {
-    const wBefore = await conn.getBalance(wallet.publicKey);
-    await sendL1([await program.methods.claimRakeback().accountsPartial({
-      trader: wallet.publicKey, session: s1, rakebackPool: RAKEBACK,
-    }).instruction()], [wallet], 'claim_rakeback');
-    const rakePaid = (await conn.getBalance(wallet.publicKey)) - wBefore + 5000; // + the tx fee it paid
-    const rakeOwed = h1.realizedLoss.muln(1000).divn(10000);
-    assert(rakePaid === rakeOwed.toNumber(),
-      `rakeback paid ${rakePaid} lamports == 10% of realized loss ${h1.realizedLoss} — the negative fee is REAL`);
-  }
-
   // sweep the throwaway trader2 wallet home
   const t2Bal = await conn.getBalance(trader2.publicKey);
   if (t2Bal > 10_000) {
@@ -368,20 +355,17 @@ if (cmd === 'auto') {
   console.log('\n━━ PHASE 1 · platform + launch (L1) ━━');
   if (!(await conn.getAccountInfo(PLATFORM))) {
     await sendL1([await program.methods.initPlatform().accountsPartial({
-      admin: wallet.publicKey, platform: PLATFORM, rakebackPool: RAKEBACK,
+      admin: wallet.publicKey, platform: PLATFORM, config: CONFIG,
       systemProgram: SystemProgram.programId,
     }).instruction()], [wallet], 'init_platform');
   }
-  await sendL1([await program.methods.fundRakeback(new BN(0.02 * LAMPORTS_PER_SOL)).accountsPartial({
-    funder: wallet.publicKey, rakebackPool: RAKEBACK, systemProgram: SystemProgram.programId,
-  }).instruction()], [wallet], 'fund_rakeback 0.02');
 
   const id = (await program.account.platform.fetch(PLATFORM)).launchSeq.toNumber();
   const launch = launchPda(id);
   await sendL1([await program.methods.createLaunch('DARKPAD', 'DARK').accountsPartial({
-    creator: wallet.publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+    creator: wallet.publicKey, platform: PLATFORM, config: CONFIG, launch, mint: mintPda(id),
     tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
-  }).instruction()], [wallet], `create_launch id=${id} (1 SOL fee, mint live at supply 0)`);
+  }).instruction()], [wallet], `create_launch id=${id} (mint live at supply 0)`);
   await sendL1([await program.methods.delegateLaunch(new BN(id)).accountsPartial({
     payer: wallet.publicKey, platform: PLATFORM, launch,
     ...delegationMetas(launch, 'Launch'),
@@ -401,9 +385,9 @@ if (cmd === 'auto') {
   const id = (await program.account.platform.fetch(PLATFORM)).launchSeq.toNumber();
   const launch = launchPda(id);
   await sendL1([await program.methods.createLaunch(name, symbol).accountsPartial({
-    creator: wallet.publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+    creator: wallet.publicKey, platform: PLATFORM, config: CONFIG, launch, mint: mintPda(id),
     tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
-  }).instruction()], [wallet], `create_launch id=${id} "${name}" (1 SOL fee)`);
+  }).instruction()], [wallet], `create_launch id=${id} "${name}"`);
   await sendL1([await program.methods.delegateLaunch(new BN(id)).accountsPartial({
     payer: wallet.publicKey, platform: PLATFORM, launch,
     ...delegationMetas(launch, 'Launch'),
@@ -413,7 +397,7 @@ if (cmd === 'auto') {
   const session = sessionPda(id, wallet.publicKey);
   await sendL1([
     await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(dep)).accountsPartial({
-      trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId,
+      trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId, gateSigner: wallet.publicKey,
     }).instruction(),
     await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
       payer: wallet.publicKey, session, ...delegationMetas(session, 'Session'),

@@ -5,7 +5,29 @@ use ephemeral_rollups_sdk::cpi::DelegateConfig;
 
 use crate::constants::*;
 use crate::error::MagicPadError;
-use crate::state::{Launch, TradeSession, LAUNCH_BONDING};
+use crate::state::{Gate, Launch, TradeSession, LAUNCH_BONDING};
+
+// The door check, shared by open_trade_session and top_up_session. The
+// gate PDA is read as a raw snapshot (same idiom as the delegated launch
+// reads below): absent or default-keyed = open entry; armed = the tx must
+// carry the gate key's signature. Trading, reconcile and claims never
+// pass through here — permissioned entry, trustless exit.
+pub(crate) fn require_gate<'info>(
+    gate: &UncheckedAccount<'info>,
+    gate_signer: &UncheckedAccount<'info>,
+) -> Result<()> {
+    let data = gate.try_borrow_data()?;
+    if data.is_empty() {
+        return Ok(()); // never armed — the PDA was never created
+    }
+    let g = Gate::try_deserialize(&mut &data[..])?;
+    if g.key == Pubkey::default() {
+        return Ok(()); // disarmed
+    }
+    require!(gate_signer.is_signer, MagicPadError::GateRequired);
+    require_keys_eq!(gate_signer.key(), g.key, MagicPadError::GateRequired);
+    Ok(())
+}
 
 // ============================================================================
 // The money rail, cloned from the stakehouse BetSession (devnet-proven):
@@ -38,6 +60,15 @@ pub struct OpenTradeSession<'info> {
     pub launch: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: the canonical gate PDA — seeds pin the address; may be empty
+    /// (never armed), which require_gate treats as an open door.
+    #[account(seeds = [GATE_SEED], bump)]
+    pub gate: UncheckedAccount<'info>,
+
+    /// CHECK: verified in require_gate — must be a tx signer matching
+    /// gate.key while armed; any unsigned pubkey while the door is open.
+    pub gate_signer: UncheckedAccount<'info>,
 }
 
 pub fn open_trade_session_handler(
@@ -46,6 +77,7 @@ pub fn open_trade_session_handler(
     session_key: Pubkey,
     deposit: u64,
 ) -> Result<()> {
+    require_gate(&ctx.accounts.gate, &ctx.accounts.gate_signer)?;
     require!(deposit >= MIN_DEPOSIT, MagicPadError::DepositTooSmall);
     require!(
         session_key != Pubkey::default(),

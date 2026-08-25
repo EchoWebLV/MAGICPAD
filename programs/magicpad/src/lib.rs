@@ -14,15 +14,14 @@ declare_id!("27HH4WUhKMmkza5NTpAjwhHkRwiPotPw55HxvjDRDsws");
 // ============================================================================
 // MAGICPAD — the dark-bonding launchpad.
 //
-// 1 SOL to launch, zero fees to trade, and the whole bonding phase runs
-// INSIDE a MagicBlock Ephemeral Rollup: one L1 approval escrows a bankroll
-// and pins a throwaway session key, then every buy/sell is a gasless
-// session-key transaction at rollup speed. The SPL mint exists from second
-// zero but stays at zero supply until graduation — to every L1 indexer and
-// snipe bot the token simply isn't there. When the crossing buy fills the
-// curve the market freezes, state commits home, cash follows ledger
-// (reconcile), traders mint their claims, losses pay 10% back from the
-// rakeback pool, and the raised SOL + unsold supply leave to seed Meteora.
+// Launch fee and graduation tax live on a config PDA (default 0 / 0 — free
+// launches). The bonding phase runs INSIDE a MagicBlock Ephemeral Rollup:
+// one L1 approval escrows a bankroll and pins a throwaway session key, then
+// every buy/sell is a gasless session-key transaction at rollup speed. The
+// SPL mint exists from second zero but stays at zero supply until
+// graduation. When the crossing buy fills the curve the market freezes,
+// state commits home, cash follows ledger (reconcile), traders mint their
+// claims, and the raised SOL + unsold supply leave to seed Meteora.
 // Dark bonding, loud graduation.
 // ============================================================================
 
@@ -39,8 +38,22 @@ pub mod magicpad {
         init_platform_handler(ctx)
     }
 
-    pub fn fund_rakeback(ctx: Context<FundRakeback>, amount: u64) -> Result<()> {
-        fund_rakeback_handler(ctx, amount)
+    pub fn set_fees(
+        ctx: Context<SetFees>,
+        launch_fee_lamports: u64,
+        launch_tax_bps: u16,
+    ) -> Result<()> {
+        set_fees_handler(ctx, launch_fee_lamports, launch_tax_bps)
+    }
+
+    pub fn withdraw_platform(ctx: Context<WithdrawPlatform>, amount: u64) -> Result<()> {
+        withdraw_platform_handler(ctx, amount)
+    }
+
+    /// Arm (or disarm, with Pubkey::default()) the entry gate: while armed,
+    /// opening or topping up a trade session requires this key's co-signature.
+    pub fn set_gate(ctx: Context<SetGate>, new_key: Pubkey) -> Result<()> {
+        set_gate_handler(ctx, new_key)
     }
 
     // -- launch lifecycle (L1) --
@@ -128,11 +141,15 @@ pub mod magicpad {
         claim_tokens_handler(ctx)
     }
 
-    pub fn claim_rakeback(ctx: Context<ClaimRakeback>) -> Result<()> {
-        claim_rakeback_handler(ctx)
-    }
-
     pub fn graduate(ctx: Context<Graduate>) -> Result<()> {
         graduate_handler(ctx)
+    }
+
+    pub fn lock_mint(ctx: Context<LockMint>) -> Result<()> {
+        lock_mint_handler(ctx)
+    }
+
+    pub fn record_pool(ctx: Context<RecordPool>, pool: Pubkey) -> Result<()> {
+        record_pool_handler(ctx, pool)
     }
 }

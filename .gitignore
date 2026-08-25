@@ -10,3 +10,8 @@ test-ledger/
 apps/web/.next/
 apps/web/tsconfig.tsbuildinfo
 scripts/.session-*.json
+scripts/migrations.json
+apps/web/public/migrations.json
+
+# entry-gate co-signer — server-only secret
+gate.json

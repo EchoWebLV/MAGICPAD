@@ -27,12 +27,15 @@ fn create_launch_takes_fee_and_makes_mint() {
     )
     .unwrap();
 
-    // the 1 SOL gate landed on the platform, to the lamport
+    // default config is free — no lamports move to the platform
     assert_eq!(
-        lamports(&svm, &platform_pda()) - platform_before,
-        LAUNCH_FEE_LAMPORTS,
-        "platform did not receive exactly the launch fee"
+        lamports(&svm, &platform_pda()),
+        platform_before,
+        "free launch must not charge the platform"
     );
+    let cfg: ConfigMirror = read_account(&svm, &config_pda());
+    assert_eq!(cfg.launch_fee_lamports, 0);
+    assert_eq!(cfg.launch_tax_bps, 0);
 
     let p: PlatformMirror = read_account(&svm, &platform_pda());
     assert_eq!(p.launch_seq, 1, "launch_seq must bump");
@@ -193,15 +196,44 @@ fn full_lifecycle_two_traders() {
         lamports(&svm, &t.admin.pubkey()) > admin_before + (a_buy + b_buy) - 10_000_000,
         "graduation hands the raised SOL to the migration wallet"
     );
+
+    // mint is still printable until lock_mint — then nobody can print
+    assert_eq!(mint_authority_opt(&svm, &mint_pda(0)), Some(platform_pda()));
+    send(&mut svm, &t.cranker, &[], &[lock_mint_ix(0)]).unwrap();
+    assert_eq!(mint_authority_opt(&svm, &mint_pda(0)), None, "lock_mint revokes mint authority");
+    assert_pad_error(
+        send(&mut svm, &t.cranker, &[], &[lock_mint_ix(0)]),
+        E_ALREADY_LOCKED,
+        "double lock_mint",
+    );
+
+    // mint-seeded pool PDA: admin pins the DAMM v2 address after migrate
+    assert_pad_error(
+        send(&mut svm, &t.alice, &[], &[record_pool_ix(&t.alice.pubkey(), 0, &t.bob.pubkey())]),
+        E_UNAUTHORIZED,
+        "record_pool not admin",
+    );
+    assert_pad_error(
+        send(&mut svm, &t.admin, &[], &[record_pool_ix(&t.admin.pubkey(), 0, &system_id())]),
+        E_BAD_POOL,
+        "record_pool empty address",
+    );
+    send(&mut svm, &t.admin, &[], &[record_pool_ix(&t.admin.pubkey(), 0, &t.bob.pubkey())]).unwrap();
+    let rec: MigratedPoolMirror = read_account(&svm, &pool_pda(&mint_pda(0)));
+    assert_eq!(rec.launch_id, 0);
+    assert_eq!(rec.mint, mint_pda(0).to_bytes());
+    assert_eq!(rec.pool, t.bob.pubkey().to_bytes(), "recorded pool is the one we passed");
+    assert!(
+        send(&mut svm, &t.admin, &[], &[record_pool_ix(&t.admin.pubkey(), 0, &t.alice.pubkey())]).is_err(),
+        "double record_pool",
+    );
 }
 
 #[test]
-fn sell_realizes_loss_and_rakeback_pays() {
+fn sell_realizes_loss_and_fizzle_settles() {
     let mut svm = fresh_svm();
     let t = setup_table(&mut svm);
     warp_past_window(&mut svm);
-    // the rakeback pool exists and gets funded (v2: platform token fees)
-    send(&mut svm, &t.admin, &[], &[fund_rakeback_ix(&t.admin.pubkey(), LAMPORTS_PER_SOL)]).unwrap();
 
     for (who, key) in [(&t.alice, &t.ka), (&t.bob, &t.kb)] {
         send(
@@ -259,25 +291,17 @@ fn sell_realizes_loss_and_rakeback_pays() {
         "winner gets deposit + profit exact"
     );
 
-    // the negative fee: 10% of realized losses back, from the pool
-    let alice_before = lamports(&svm, &t.alice.pubkey());
-    let pool_before = lamports(&svm, &rakeback_pda());
-    send(&mut svm, &t.cranker, &[], &[claim_rakeback_ix(&t.alice.pubkey(), 0)]).unwrap();
-    let paid = lamports(&svm, &t.alice.pubkey()) - alice_before;
-    assert_eq!(paid, sa.realized_loss * RAKEBACK_BPS / 10_000, "rakeback = loss x 10%");
-    assert_eq!(pool_before - lamports(&svm, &rakeback_pda()), paid, "paid from the pool");
+    // a fizzled market never graduates, and lock_mint / record_pool are gated the same way
     assert_pad_error(
-        send(&mut svm, &t.cranker, &[], &[claim_rakeback_ix(&t.alice.pubkey(), 0)]),
-        E_ALREADY_CLAIMED,
-        "double rakeback",
+        send(&mut svm, &t.cranker, &[], &[lock_mint_ix(0)]),
+        E_NOT_GRADUATABLE,
+        "lock_mint before graduate",
     );
     assert_pad_error(
-        send(&mut svm, &t.cranker, &[], &[claim_rakeback_ix(&t.bob.pubkey(), 0)]),
-        E_NOTHING_TO_CLAIM,
-        "winners have no loss to rake back",
+        send(&mut svm, &t.admin, &[], &[record_pool_ix(&t.admin.pubkey(), 0, &t.bob.pubkey())]),
+        E_NOT_GRADUATABLE,
+        "record_pool before graduate",
     );
-
-    // a fizzled market never graduates
     assert_pad_error(
         send(&mut svm, &t.admin, &[], &[graduate_ix(&t.admin.pubkey(), 0)]),
         E_NOT_GRADUATABLE,
@@ -286,10 +310,9 @@ fn sell_realizes_loss_and_rakeback_pays() {
 }
 
 #[test]
-fn first_window_cap_enforced() {
+fn first_window_has_no_buy_cap() {
     let mut svm = fresh_svm();
     let t = setup_table(&mut svm);
-    // NO warp — we are inside the first window on purpose
     send(
         &mut svm,
         &t.alice,
@@ -298,22 +321,10 @@ fn first_window_cap_enforced() {
     )
     .unwrap();
 
-    // 0.6 SOL in the window: over the 0.5 cap
-    assert_pad_error(
-        send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 600_000_000)]),
-        E_FIRST_WINDOW_CAP,
-        "single over-cap buy",
-    );
-    // 0.3 then 0.3: the SECOND crosses the gross cap
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 300_000_000)]).unwrap();
-    assert_pad_error(
-        send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 300_000_000)]),
-        E_FIRST_WINDOW_CAP,
-        "gross cap across buys",
-    );
-    // window over → the cap lifts
-    warp_past_window(&mut svm);
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, LAMPORTS_PER_SOL)]).unwrap();
+    // t=0: a 0.6 then 0.7 buy must both land. The old 0.5◎ / 60s session
+    // cap is gone — deposit is the only ceiling.
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 600_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 700_000_000)]).unwrap();
     assert_eq!(read_session(&svm, 0, &t.alice.pubkey()).sol_spent, 1_300_000_000);
 }
 

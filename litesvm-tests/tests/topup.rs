@@ -12,7 +12,7 @@ use solana_signer::Signer;
 const DEP: u64 = 50_000_000; // 0.05 SOL opening deposit
 const TOP: u64 = 100_000_000; // 0.1 SOL top-up
 
-/// open a session for alice past the anti-snipe window, buy the deposit full
+/// open a session for alice and buy the deposit full
 fn table_at_ceiling(svm: &mut litesvm::LiteSVM) -> Table {
     let t = setup_table(svm);
     warp_past_window(svm);

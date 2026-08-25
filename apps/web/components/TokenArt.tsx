@@ -43,8 +43,8 @@ export default function TokenArt({ id, creator, symbol, size }: {
       className="tokenart blank"
       style={{
         ...px, fontSize: size * 0.42,
-        background: `linear-gradient(${angle}deg, rgba(255,199,0,0.18), rgba(255,199,0,0.02) 64%), #0d0d0c`,
-        color: 'rgba(255,199,0,0.8)',
+        background: `linear-gradient(${angle}deg, rgba(200,245,66,0.2), rgba(200,245,66,0.02) 64%), #191919`,
+        color: 'rgba(200,245,66,0.85)',
       }}
     >
       {symbol.slice(0, 1)}

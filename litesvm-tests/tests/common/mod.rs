@@ -14,15 +14,12 @@ pub const SO_PATH: &str = "../target/deploy/magicpad.so";
 pub const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
 // program constants mirrored (keep in sync with constants.rs)
-pub const LAUNCH_FEE_LAMPORTS: u64 = 1_000_000_000;
 pub const TOKEN_TOTAL_SUPPLY: u64 = 1_000_000_000_000_000;
 pub const CURVE_TOKEN_ALLOC: u64 = 793_100_000_000_000;
 pub const VIRTUAL_SOL_INIT: u64 = 30_000_000_000;
 pub const VIRTUAL_TOK_INIT: u64 = 1_073_000_000_000_000;
 pub const GRADUATION_LAMPORTS: u64 = 5_000_000_000;
-pub const FIRST_WINDOW_SECS: i64 = 60;
-pub const FIRST_WINDOW_MAX_BUY: u64 = 500_000_000;
-pub const RAKEBACK_BPS: u64 = 1_000;
+pub const FIRST_WINDOW_SECS: i64 = 60; // leftover Launch field; not enforced
 pub const MIN_DEPOSIT: u64 = 10_000_000;
 
 // launch states
@@ -51,6 +48,10 @@ pub const E_UNAUTHORIZED: u32 = 15;
 pub const E_WRONG_LAUNCH: u32 = 16;
 pub const E_POT_NOT_READY: u32 = 17;
 pub const E_ALREADY_APPLIED: u32 = 18;
+pub const E_MINT_NOT_READY: u32 = 19;
+pub const E_ALREADY_LOCKED: u32 = 20;
+pub const E_BAD_POOL: u32 = 21;
+pub const E_TAX_TOO_HIGH: u32 = 22;
 
 pub fn program_id() -> Address {
     "27HH4WUhKMmkza5NTpAjwhHkRwiPotPw55HxvjDRDsws".parse().unwrap()
@@ -68,14 +69,17 @@ pub fn ata_program_id() -> Address {
 pub fn platform_pda() -> Address {
     Address::find_program_address(&[b"platform"], &program_id()).0
 }
-pub fn rakeback_pda() -> Address {
-    Address::find_program_address(&[b"rakeback"], &program_id()).0
+pub fn config_pda() -> Address {
+    Address::find_program_address(&[b"config"], &program_id()).0
 }
 pub fn launch_pda(id: u64) -> Address {
     Address::find_program_address(&[b"launch", &id.to_le_bytes()], &program_id()).0
 }
 pub fn mint_pda(id: u64) -> Address {
     Address::find_program_address(&[b"mint", &id.to_le_bytes()], &program_id()).0
+}
+pub fn pool_pda(mint: &Address) -> Address {
+    Address::find_program_address(&[b"pool", mint.as_ref()], &program_id()).0
 }
 pub fn session_pda(launch_id: u64, trader: &Address) -> Address {
     Address::find_program_address(
@@ -192,22 +196,40 @@ pub fn init_platform_ix(admin: &Address) -> Instruction {
         accounts: vec![
             AccountMeta::new(*admin, true),
             AccountMeta::new(platform_pda(), false),
-            AccountMeta::new(rakeback_pda(), false),
+            AccountMeta::new(config_pda(), false),
             AccountMeta::new_readonly(system_id(), false),
         ],
         data: ix_data_empty("init_platform"),
     }
 }
 
-pub fn fund_rakeback_ix(funder: &Address, amount: u64) -> Instruction {
+#[derive(borsh::BorshSerialize)]
+pub struct SetFeesArgs {
+    pub launch_fee_lamports: u64,
+    pub launch_tax_bps: u16,
+}
+
+pub fn set_fees_ix(admin: &Address, launch_fee_lamports: u64, launch_tax_bps: u16) -> Instruction {
     Instruction {
         program_id: program_id(),
         accounts: vec![
-            AccountMeta::new(*funder, true),
-            AccountMeta::new(rakeback_pda(), false),
+            AccountMeta::new(*admin, true),
+            AccountMeta::new_readonly(platform_pda(), false),
+            AccountMeta::new(config_pda(), false),
             AccountMeta::new_readonly(system_id(), false),
         ],
-        data: ix_data("fund_rakeback", &amount),
+        data: ix_data("set_fees", &SetFeesArgs { launch_fee_lamports, launch_tax_bps }),
+    }
+}
+
+pub fn withdraw_platform_ix(admin: &Address, amount: u64) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*admin, true),
+            AccountMeta::new(platform_pda(), false),
+        ],
+        data: ix_data("withdraw_platform", &amount),
     }
 }
 
@@ -223,6 +245,7 @@ pub fn create_launch_ix(creator: &Address, id: u64, name: &str, symbol: &str) ->
         accounts: vec![
             AccountMeta::new(*creator, true),
             AccountMeta::new(platform_pda(), false),
+            AccountMeta::new_readonly(config_pda(), false),
             AccountMeta::new(launch_pda(id), false),
             AccountMeta::new(mint_pda(id), false),
             AccountMeta::new_readonly(token_program_id(), false),
@@ -255,6 +278,9 @@ pub fn open_trade_session_ix(
             AccountMeta::new(session_pda(launch_id, trader), false),
             AccountMeta::new_readonly(launch_pda(launch_id), false),
             AccountMeta::new_readonly(system_id(), false),
+            AccountMeta::new_readonly(gate_pda(), false),
+            // unsigned placeholder — enough while the gate is disarmed
+            AccountMeta::new_readonly(*trader, false),
         ],
         data: ix_data(
             "open_trade_session",
@@ -332,6 +358,9 @@ pub fn top_up_session_ix(
             AccountMeta::new_readonly(launch_pda(launch_id), false),
             AccountMeta::new(topup_pda(launch_id, trader, nonce), false),
             AccountMeta::new_readonly(system_id(), false),
+            AccountMeta::new_readonly(gate_pda(), false),
+            // unsigned placeholder — enough while the gate is disarmed
+            AccountMeta::new_readonly(*trader, false),
         ],
         data: ix_data("top_up_session", &TopUpSessionArgs { launch_id, nonce, amount }),
     }
@@ -416,25 +445,14 @@ pub fn claim_tokens_ix(cranker: &Address, trader: &Address, launch_id: u64) -> I
     }
 }
 
-pub fn claim_rakeback_ix(trader: &Address, launch_id: u64) -> Instruction {
-    Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(*trader, false),
-            AccountMeta::new(session_pda(launch_id, trader), false),
-            AccountMeta::new(rakeback_pda(), false),
-        ],
-        data: ix_data_empty("claim_rakeback"),
-    }
-}
-
 pub fn graduate_ix(admin: &Address, launch_id: u64) -> Instruction {
     let mint = mint_pda(launch_id);
     Instruction {
         program_id: program_id(),
         accounts: vec![
             AccountMeta::new(*admin, true),
-            AccountMeta::new_readonly(platform_pda(), false),
+            AccountMeta::new(platform_pda(), false),
+            AccountMeta::new_readonly(config_pda(), false),
             AccountMeta::new(launch_pda(launch_id), false),
             AccountMeta::new(mint, false),
             AccountMeta::new(ata_address(admin, &mint), false),
@@ -446,12 +464,48 @@ pub fn graduate_ix(admin: &Address, launch_id: u64) -> Instruction {
     }
 }
 
+pub fn lock_mint_ix(launch_id: u64) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(platform_pda(), false),
+            AccountMeta::new_readonly(launch_pda(launch_id), false),
+            AccountMeta::new(mint_pda(launch_id), false),
+            AccountMeta::new_readonly(token_program_id(), false),
+        ],
+        data: ix_data_empty("lock_mint"),
+    }
+}
+
+pub fn record_pool_ix(admin: &Address, launch_id: u64, pool: &Address) -> Instruction {
+    let mint = mint_pda(launch_id);
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*admin, true),
+            AccountMeta::new_readonly(platform_pda(), false),
+            AccountMeta::new_readonly(launch_pda(launch_id), false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new(pool_pda(&mint), false),
+            AccountMeta::new_readonly(system_id(), false),
+        ],
+        data: ix_data("record_pool", &pool.to_bytes()),
+    }
+}
+
 // ---------- borsh mirrors (skip the 8-byte discriminator) ----------
 
 #[derive(borsh::BorshDeserialize, Debug)]
 pub struct PlatformMirror {
     pub admin: [u8; 32],
     pub launch_seq: u64,
+    pub bump: u8,
+}
+
+#[derive(borsh::BorshDeserialize, Debug)]
+pub struct ConfigMirror {
+    pub launch_fee_lamports: u64,
+    pub launch_tax_bps: u16,
     pub bump: u8,
 }
 
@@ -471,6 +525,14 @@ pub struct LaunchMirror {
     pub tokens_sold: u64,
     pub sessions_reconciled: u64,
     pub sessions_opened: u64,
+    pub bump: u8,
+}
+
+#[derive(borsh::BorshDeserialize, Debug)]
+pub struct MigratedPoolMirror {
+    pub launch_id: u64,
+    pub mint: [u8; 32],
+    pub pool: [u8; 32],
     pub bump: u8,
 }
 
@@ -540,6 +602,12 @@ pub fn mint_authority(svm: &LiteSVM, mint: &Address) -> Address {
     Address::try_from(&d[4..36]).unwrap()
 }
 
+pub fn mint_authority_opt(svm: &LiteSVM, mint: &Address) -> Option<Address> {
+    let d = svm.get_account(mint).unwrap().data;
+    let tag = u32::from_le_bytes(d[0..4].try_into().unwrap());
+    if tag == 0 { None } else { Some(Address::try_from(&d[4..36]).unwrap()) }
+}
+
 /// The standard table: platform inited, launch 0 created by `creator`,
 /// funded traders alice + bob with session keys, one fee-paying cranker.
 pub struct Table {
@@ -571,8 +639,63 @@ pub fn setup_table(svm: &mut LiteSVM) -> Table {
     t
 }
 
-/// jump past launch 0's first buy window (the anti-snipe cap)
+/// clock jump kept so older tests stay stable; buys no longer need it
 pub fn warp_past_window(svm: &mut LiteSVM) {
     let l = read_launch(svm, 0);
     warp_to(svm, l.first_window_end_ts + 1);
+}
+
+// ---------- the entry gate (UI-only door) ----------
+
+pub const E_GATE_REQUIRED: u32 = 23;
+
+pub fn gate_pda() -> Address {
+    Address::find_program_address(&[b"gate"], &program_id()).0
+}
+
+/// admin arms (or disarms, with Address::default()) the entry gate.
+pub fn set_gate_ix(admin: &Address, new_key: &Address) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*admin, true),
+            AccountMeta::new_readonly(platform_pda(), false),
+            AccountMeta::new(gate_pda(), false),
+            AccountMeta::new_readonly(system_id(), false),
+        ],
+        data: ix_data("set_gate", &new_key.to_bytes()),
+    }
+}
+
+/// open with the platform gate co-signing — the only door once armed.
+pub fn open_trade_session_gated_ix(
+    trader: &Address,
+    launch_id: u64,
+    session_key: &Address,
+    deposit: u64,
+    gate_signer: &Address,
+) -> Instruction {
+    let mut ix = open_trade_session_ix(trader, launch_id, session_key, deposit);
+    let n = ix.accounts.len();
+    ix.accounts[n - 1] = AccountMeta::new_readonly(*gate_signer, true);
+    ix
+}
+
+pub fn top_up_session_gated_ix(
+    trader: &Address,
+    launch_id: u64,
+    nonce: u64,
+    amount: u64,
+    gate_signer: &Address,
+) -> Instruction {
+    let mut ix = top_up_session_ix(trader, launch_id, nonce, amount);
+    let n = ix.accounts.len();
+    ix.accounts[n - 1] = AccountMeta::new_readonly(*gate_signer, true);
+    ix
+}
+
+#[derive(borsh::BorshDeserialize, Debug)]
+pub struct GateMirror {
+    pub key: [u8; 32],
+    pub bump: u8,
 }

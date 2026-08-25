@@ -2,16 +2,14 @@
 
 /* One wallet surface for the whole app, fed by two rails:
  *
- *  - Privy embedded wallet (email/social login): the key lives with the
- *    user's Privy account, signing is headless (showWalletUIs false), so
- *    L1 legs — session open, escrow top-up, launch — run popup-free.
- *  - wallet-standard adapters (Phantom & co): the classic path, untouched.
+ *  - Privy (the product door): email/social → embedded Solana wallet,
+ *    headless signing. Detected extensions (Phantom & co) land in the
+ *    same Privy modal. connect() always opens that modal.
+ *  - wallet-adapter: only when NEXT_PUBLIC_PRIVY_APP_ID is unset.
  *
- * Privy wins when the user is logged in and has an embedded wallet.
- * When NEXT_PUBLIC_PRIVY_APP_ID is unset the Privy branch is never
- * mounted and the app behaves exactly as before. The export picks its
- * implementation at module load — the env var is a build-time constant,
- * so hook order is stable by construction.
+ * Privy wins once the user is authenticated and has a Solana wallet.
+ * The export picks its implementation at module load — the env var is
+ * a build-time constant, so hook order is stable by construction.
  *
  * Identity discipline: Privy's hooks hand back fresh array/function
  * identities every render. Anything they touch lives in a ref; everything
@@ -23,6 +21,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { Connection, PublicKey, Transaction, TransactionSignature } from '@solana/web3.js';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePrivy } from '@privy-io/react-auth';
 import {
   useSignMessage, useSignTransaction, useWallets as usePrivySolanaWallets,
@@ -42,23 +41,28 @@ export interface ActiveWallet extends WalletLike {
   privyReady: boolean;
   privyAuthed: boolean;
   login: (() => void) | null;
+  /** Open the one connect door — Privy modal, or the adapter modal if Privy is off. */
+  connect: () => void;
   logout: (() => Promise<void>) | null;
 }
 
-const dead: Pick<ActiveWallet, 'source' | 'who' | 'login' | 'logout' | 'privyReady' | 'privyAuthed'> = {
-  source: null, who: null, login: null, logout: null,
+const dead: Pick<ActiveWallet, 'source' | 'who' | 'login' | 'connect' | 'logout' | 'privyReady' | 'privyAuthed'> = {
+  source: null, who: null, login: null, connect: () => {}, logout: null,
   privyReady: false, privyAuthed: false,
 };
 
 function useAdapterOnly(): ActiveWallet {
   const adapter = useWallet();
+  const { setVisible } = useWalletModal();
+  const connect = useCallback(() => setVisible(true), [setVisible]);
   return useMemo(() => ({
     ...dead,
     publicKey: adapter.publicKey,
     sendTransaction: adapter.sendTransaction,
     signMessage: adapter.signMessage,
     source: adapter.publicKey ? ('adapter' as const) : null,
-  }), [adapter.publicKey, adapter.sendTransaction, adapter.signMessage]);
+    connect,
+  }), [adapter.publicKey, adapter.sendTransaction, adapter.signMessage, connect]);
 }
 
 function useWithPrivy(): ActiveWallet {
@@ -68,29 +72,28 @@ function useWithPrivy(): ActiveWallet {
   const { signMessage } = useSignMessage();
   const { wallets } = usePrivySolanaWallets();
 
-  // the embedded wallet is the one carrying Privy's own feature
-  // namespace; external wallets surfaced through Privy don't have it
-  const embedded = wallets.find(
+  // embedded first (headless); otherwise the first extension Privy attached
+  const chosen = wallets.find(
     (w) => 'privy:' in (w.standardWallet.features as Record<string, unknown>),
-  );
-  const embeddedAddress = embedded?.address ?? null;
+  ) ?? wallets[0] ?? null;
+  const chosenAddress = chosen?.address ?? null;
 
-  const volatile = useRef({ embedded, signTransaction, signMessage, login, logout });
-  volatile.current = { embedded, signTransaction, signMessage, login, logout };
+  const volatile = useRef({ chosen, signTransaction, signMessage, login, logout });
+  volatile.current = { chosen, signTransaction, signMessage, login, logout };
 
   const stableLogin = useCallback(() => { volatile.current.login(); }, []);
   const stableLogout = useCallback(async () => { await volatile.current.logout(); }, []);
 
   const privyPk = useMemo(
-    () => (embeddedAddress ? new PublicKey(embeddedAddress) : null),
-    [embeddedAddress],
+    () => (chosenAddress ? new PublicKey(chosenAddress) : null),
+    [chosenAddress],
   );
 
   const privySend = useCallback(async (
     tx: Transaction, conn: Connection, options?: { maxRetries?: number },
   ): Promise<TransactionSignature> => {
-    const { embedded: w, signTransaction: sign } = volatile.current;
-    if (!w) throw new Error('Privy embedded wallet not ready');
+    const { chosen: w, signTransaction: sign } = volatile.current;
+    if (!w) throw new Error('Privy wallet not ready');
     // sendWithWallet pinned feePayer + blockhash already — serialize
     // unsigned wire bytes, let Privy add the one signature, broadcast
     const bytes = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
@@ -105,8 +108,8 @@ function useWithPrivy(): ActiveWallet {
   // deterministic per (message, key) — every browser derives the same
   // trade keys from it, headless because showWalletUIs is off
   const privySignMessage = useCallback(async (message: Uint8Array): Promise<Uint8Array> => {
-    const { embedded: w, signMessage: sign } = volatile.current;
-    if (!w) throw new Error('Privy embedded wallet not ready');
+    const { chosen: w, signMessage: sign } = volatile.current;
+    if (!w) throw new Error('Privy wallet not ready');
     const { signature } = await sign({ message, wallet: w });
     return signature;
   }, []);
@@ -122,7 +125,8 @@ function useWithPrivy(): ActiveWallet {
       return {
         publicKey: privyPk, sendTransaction: privySend, signMessage: privySignMessage,
         source: 'privy' as const, who,
-        privyReady: ready, privyAuthed: true, login: stableLogin, logout: stableLogout,
+        privyReady: ready, privyAuthed: true, login: stableLogin, connect: stableLogin,
+        logout: stableLogout,
       };
     }
     return {
@@ -131,7 +135,8 @@ function useWithPrivy(): ActiveWallet {
       sendTransaction: adapter.sendTransaction,
       signMessage: adapter.signMessage,
       source: adapter.publicKey ? ('adapter' as const) : null,
-      privyReady: ready, privyAuthed: authenticated, login: stableLogin, logout: stableLogout,
+      privyReady: ready, privyAuthed: authenticated, login: stableLogin,
+      connect: stableLogin, logout: stableLogout,
     };
   }, [authenticated, privyPk, privySend, privySignMessage, who, ready, stableLogin, stableLogout,
     adapter.publicKey, adapter.sendTransaction, adapter.signMessage]);

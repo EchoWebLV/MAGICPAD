@@ -1,21 +1,20 @@
 'use client';
 
-/* Wallet rail, two providers deep. wallet-standard wallets (Phantom,
- * Solflare, Backpack) register themselves and show up automatically.
- * PrivyProvider mounts only when NEXT_PUBLIC_PRIVY_APP_ID is set — it
- * adds email/social login with an embedded Solana wallet whose signing
- * is headless (showWalletUIs false): deposits and top-ups without a
- * single popup. */
+/* Wallet rail. Privy is the door when NEXT_PUBLIC_PRIVY_APP_ID is set:
+ * email / social get an embedded Solana wallet (headless signing), and
+ * detected extensions (Phantom, Solflare, Backpack) show in the same
+ * modal. wallet-adapter stays underneath so the app still runs if Privy
+ * is unset — injected wallets only, no WalletConnect. */
 
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PrivyProvider } from '@privy-io/react-auth';
+import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { RPC_URL } from '../lib/magicpad';
 import { PRIVY_APP_ID, privyEnabled } from '../lib/use-active-wallet';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
-// built once — Privy's standard-wallet hooks read the cluster through these
 const solanaRpcs = privyEnabled ? {
   'solana:devnet': {
     rpc: createSolanaRpc(RPC_URL),
@@ -23,6 +22,10 @@ const solanaRpcs = privyEnabled ? {
     blockExplorerUrl: 'https://explorer.solana.com',
   },
 } : undefined;
+
+const solanaConnectors = privyEnabled
+  ? toSolanaWalletConnectors({ shouldAutoConnect: false })
+  : undefined;
 
 function Adapters({ children }: { children: React.ReactNode }) {
   return (
@@ -40,11 +43,23 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <PrivyProvider
       appId={PRIVY_APP_ID}
       config={{
-        appearance: { theme: 'dark', accentColor: '#ffc700' },
+        appearance: {
+          theme: 'dark',
+          accentColor: '#d4ff4a',
+          walletChainType: 'solana-only',
+          showWalletLoginFirst: true,
+          walletList: [
+            'phantom',
+            'solflare',
+            'backpack',
+            'detected_solana_wallets',
+          ],
+        },
         embeddedWallets: {
           solana: { createOnLogin: 'users-without-wallets' },
           showWalletUIs: false,
         },
+        externalWallets: { solana: { connectors: solanaConnectors } },
         solana: { rpcs: solanaRpcs },
       }}
     >

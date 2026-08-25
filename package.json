@@ -8,10 +8,12 @@
   },
   "scripts": {
     "demo": "node scripts/demo-trader.mjs",
-    "keeper": "node scripts/keeper.mjs"
+    "keeper": "node scripts/keeper.mjs",
+    "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@meteora-ag/cp-amm-sdk": "^1.4.6",
     "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.98.4"
   }

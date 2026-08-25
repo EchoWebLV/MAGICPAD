@@ -71,10 +71,9 @@ function Holdings({ owner }: { owner: PublicKey }) {
       )}
       {rows?.map(({ l, pos, value, escrow }) => {
         const pnl = value - pos.costBasis;
-        const rake = Math.floor(pos.realizedLoss / 10);
         const held = pos.tokensHeld > 0n;
         return (
-          <Link key={l.id} href={`/launch/${l.id}`} className="hold">
+          <Link key={l.id} href={`/launch/${l.mint}`} className="hold">
             <TokenArt id={l.id} creator={l.creator} symbol={l.symbol} size={38} />
             <div className="hbody">
               <div className="htop">
@@ -85,8 +84,6 @@ function Holdings({ owner }: { owner: PublicKey }) {
               <div className="hstats mono">
                 {held && <span>{fmtTok(pos.tokensHeld)} {l.symbol}</span>}
                 {escrow > 0 && <span className="faint">escrow {fmtSol(escrow)}◎</span>}
-                {/* dust rounds to 0.000◎ — say nothing rather than say zero */}
-                {rake >= DUST && <span className="faint">rakeback {fmtSol(rake)}◎</span>}
               </div>
             </div>
             <div className="hval mono">
@@ -177,8 +174,8 @@ export default function WalletPage() {
         <div className="panel">
           <h3>wallet</h3>
           <p className="dim">No wallet connected.</p>
-          {privyEnabled && w.login && (
-            <button className="btn" onClick={w.login} disabled={!w.privyReady}>Log in</button>
+          {privyEnabled && !w.privyAuthed && (
+            <button className="btn" onClick={w.connect} disabled={!w.privyReady}>Connect</button>
           )}
         </div>
       </main>

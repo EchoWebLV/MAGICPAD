@@ -3,32 +3,44 @@
 /* The terminal for one market. Left: live curve + activity implied from
  * curve deltas (the whole point of dark bonding is that there is no public
  * trade log to scrape — the curve moving IS the only tell). Right: the
- * wallet's session — one approved deposit, then gasless ER buys/sells. */
+ * same one-click buy as the board — first click opens the escrow if it
+ * has to, then every fill is a gasless session-key tx painted immediately. */
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { privyEnabled, useActiveWallet } from '../../../lib/use-active-wallet';
+import { useActiveWallet } from '../../../lib/use-active-wallet';
 import { PublicKey } from '@solana/web3.js';
 import CurveChart from '../../../components/CurveChart';
+import Glyph from '../../../components/Glyph';
 import TokenArt from '../../../components/TokenArt';
+import { copyText } from '../../../lib/clip';
 import { SHOW_DARK_CHIP } from '../../../lib/flags';
 import {
   LaunchMeta, attachMetaTx, clearMeta, pinAssets, resolveMeta, squashImage,
 } from '../../../lib/metadata';
+import { BUY_PRESETS, DEFAULT_BUY, readBuyPreset, writeBuyPreset } from '../../../lib/buy-size';
 import {
-  FIRST_WINDOW_MAX_BUY, GRADUATION_LAMPORTS, LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
-  TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fetchLaunches, fmtSol, fmtTok, marketCapSol,
-  sellQuote, short, solscanAccount, solscanTx,
+  GRADUATION_LAMPORTS, LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
+  TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fetchLaunches, fmtAge, fmtSol, fmtTok,
+  launchIdFromPath, marketCapSol, sellQuote, short, solscanAccount, solscanTx,
 } from '../../../lib/magicpad';
 import { HistRow, fetchHistory } from '../../../lib/history';
-import { buildCandles, replayMcap } from '../../../lib/replay';
+import {
+  bumpBuy, bumpSell, mergeHist, PaintPending, posCaughtUp, pushPending, unmatchedLocals,
+  escrowDepositAdd,
+} from '../../../lib/paint-trade';
+import { replayMcap } from '../../../lib/replay';
 import { getSolUsd } from '../../../lib/usd';
 import {
-  PositionView, buyLive, ensureTradeSession, readLaunchLive, readPosition, sellLive,
-  topUpSession,
+  PositionView, claimTokens, quickBuy, readLaunchLive, readPosition, sellLive,
 } from '../../../lib/trade-live';
-import { sendWithWallet, walletBalance } from '../../../lib/wallet-tx';
+import { sendWithWallet, splBalance, walletBalance } from '../../../lib/wallet-tx';
+import {
+  meteoraQuote, meteoraSpot, meteoraSwapTx, splHolders,
+  type SplHolder, type Spot, type SwapQuote,
+} from '../../../lib/public-swap';
+import { meteoraPoolUrl } from '../../../lib/pool';
 
 interface Live {
   creator: string; name: string; symbol: string; state: number; dark: boolean; createdTs: number;
@@ -47,8 +59,9 @@ const toLive = (l: any, dark: boolean): Live => ({
 });
 
 export default function LaunchPage() {
-  const { id: idParam } = useParams<{ id: string }>();
-  const id = Number.parseInt(idParam ?? '', 10);
+  const param = useParams<{ id: string }>().id ?? '';
+  const router = useRouter();
+  const [id, setId] = useState<number | null>(null);
   const wallet = useActiveWallet();
   const { publicKey } = wallet;
 
@@ -60,13 +73,21 @@ export default function LaunchPage() {
   const [holders, setHolders] = useState<{ trader: string; pos: PositionView }[] | null>(null);
   const [solUsd, setSolUsd] = useState<number | null>(null);
   const [others, setOthers] = useState<LaunchView[] | null>(null);
+  const [poolQuote, setPoolQuote] = useState<SwapQuote | null>(null);
+  const [poolErr, setPoolErr] = useState('');
+  const [spl, setSpl] = useState<bigint>(0n);
+  const [poolSpot, setPoolSpot] = useState<Spot | null>(null);
+  const [splHolds, setSplHolds] = useState<SplHolder[] | null>(null);
 
-  const [depositIn, setDepositIn] = useState('0.05');
-  const [buyIn, setBuyIn] = useState('0.01');
+  const [buyIn, setBuyIn] = useState(String(DEFAULT_BUY));
   const [sellIn, setSellIn] = useState('');
+  const [side, setSide] = useState<'buy' | 'sell'>('buy');
+  const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const [ok, setOk] = useState('');
+  const pendingRef = useRef<PaintPending | null>(null);
+  const posRef = useRef<PositionView | null>(null);
 
   // undefined = still resolving; null = this market has no face yet
   const [meta, setMeta] = useState<LaunchMeta | null | undefined>(undefined);
@@ -76,8 +97,26 @@ export default function LaunchPage() {
   );
   const attachRef = useRef<HTMLInputElement>(null);
   const creator = live?.creator ?? null;
+  useEffect(() => { setBuyIn(String(readBuyPreset())); }, []);
+  posRef.current = pos;
   useEffect(() => {
-    if (!Number.isInteger(id) || !creator) return;
+    let alive = true;
+    setId(null);
+    setGone(false);
+    setLive(null);
+    launchIdFromPath(param).then((n) => {
+      if (!alive) return;
+      if (n === null) setGone(true);
+      else setId(n);
+    });
+    return () => { alive = false; };
+  }, [param]);
+  useEffect(() => {
+    if (!live) return;
+    if (param !== live.mint) router.replace(`/launch/${live.mint}`);
+  }, [live, param, router]);
+  useEffect(() => {
+    if (id === null || !creator) return;
     let alive = true;
     resolveMeta(id, creator).then((m) => { if (alive) setMeta(m); });
     return () => { alive = false; };
@@ -96,7 +135,7 @@ export default function LaunchPage() {
   const holdersRef = useRef<Map<string, PositionView>>(new Map());
 
   const refresh = useCallback(async () => {
-    if (!Number.isInteger(id)) return;
+    if (id === null) return;
     const [r, p, h] = await Promise.all([
       readLaunchLive(id).catch(() => null),
       // undefined = the read FAILED this tick (ER hiccup); null = the chain
@@ -104,21 +143,37 @@ export default function LaunchPage() {
       publicKey ? readPosition(publicKey, id).catch(() => undefined) : Promise.resolve(null),
       fetchHistory(id).catch(() => null),
     ]);
-    if (r) setLive(toLive(r.l, r.dark));
+    const hold = pendingRef.current;
+    const caught = !hold || posCaughtUp(p, hold.pos);
+    // a fill we just painted must not lose to a stale ER read — hold the
+    // curve and the position until this trader's session has moved, not
+    // until a clock runs out
+    if (r && caught) setLive(toLive(r.l, r.dark));
     else if (r === null && live === null) setGone(true);
-    if (p !== undefined) setPos(p);
+    if (p !== undefined && caught) setPos(p);
     if (h) {
-      setHist(h);
+      const rows = hold ? mergeHist(h, hold.rows) : h;
+      setHist(rows);
+      if (hold) {
+        const extra = unmatchedLocals(h, hold.rows);
+        pendingRef.current = caught && extra.length === 0 ? null : { ...hold, rows: extra };
+      }
       // holders = every wallet that ever opened a session, read live from the ER
       const traders = [...new Set(h.filter((e) => e.kind === 'DEPOSIT').map((e) => e.actor))].slice(0, 20);
-      const rows = (await Promise.all(traders.map(async (t) => {
-        const tp = await readPosition(new PublicKey(t), id)
-          .catch(() => holdersRef.current.get(t) ?? null); // hold last known through hiccups
+      if (publicKey && hold && !traders.includes(publicKey.toBase58())) {
+        traders.unshift(publicKey.toBase58());
+      }
+      const next = (await Promise.all(traders.map(async (t) => {
+        const you = publicKey?.toBase58() === t;
+        const tp = you && hold && !caught && posRef.current
+          ? posRef.current
+          : await readPosition(new PublicKey(t), id)
+            .catch(() => holdersRef.current.get(t) ?? null); // hold last known through hiccups
         return tp ? { trader: t, pos: tp } : null;
       }))).filter(Boolean) as { trader: string; pos: PositionView }[];
-      rows.sort((x, y) => (y.pos.tokensHeld > x.pos.tokensHeld ? 1 : y.pos.tokensHeld < x.pos.tokensHeld ? -1 : 0));
-      holdersRef.current = new Map(rows.map((row) => [row.trader, row.pos]));
-      setHolders(rows);
+      next.sort((x, y) => (y.pos.tokensHeld > x.pos.tokensHeld ? 1 : y.pos.tokensHeld < x.pos.tokensHeld ? -1 : 0));
+      holdersRef.current = new Map(next.map((row) => [row.trader, row.pos]));
+      setHolders(next);
     }
   }, [id, live, publicKey]);
 
@@ -140,15 +195,46 @@ export default function LaunchPage() {
     fetchLaunches().then((ls) => setOthers(ls.filter((x) => x.id !== id))).catch(() => { /* panel hides */ });
   }, [id]);
 
+  const publicMint = live?.state === 3 ? live.mint : null;
+  useEffect(() => {
+    if (!publicMint || !publicKey) { setSpl(0n); return; }
+    let on = true;
+    splBalance(publicKey, new PublicKey(publicMint)).then((n) => { if (on) setSpl(n); }).catch(() => { if (on) setSpl(0n); });
+    return () => { on = false; };
+  }, [publicMint, publicKey, ok]);
+
+  useEffect(() => {
+    if (!publicMint) { setPoolSpot(null); setSplHolds(null); return; }
+    let on = true;
+    const tick = () => {
+      meteoraSpot(publicMint).then((s) => { if (on) setPoolSpot(s); }).catch(() => { /* quote err is separate */ });
+      splHolders(publicMint).then((h) => { if (on) setSplHolds(h); }).catch(() => { /* keep last */ });
+    };
+    tick();
+    const t = setInterval(tick, 4000);
+    return () => { on = false; clearInterval(t); };
+  }, [publicMint, ok]);
+
+  useEffect(() => {
+    if (!publicMint) { setPoolQuote(null); setPoolErr(''); return; }
+    const amount = side === 'buy'
+      ? String(Math.round((Number.parseFloat(buyIn) || 0) * LAMPORTS))
+      : String(Math.round((Number.parseFloat(sellIn) || 0) * 10 ** TOKEN_DECIMALS));
+    if (!/^[1-9]\d*$/.test(amount)) { setPoolQuote(null); setPoolErr(''); return; }
+    let on = true;
+    const t = setTimeout(() => {
+      meteoraQuote(publicMint, side, amount)
+        .then((q) => { if (on) { setPoolQuote(q); setPoolErr(''); } })
+        .catch((e: any) => { if (on) { setPoolQuote(null); setPoolErr(String(e?.message ?? e)); } });
+    }, 180);
+    return () => { on = false; clearTimeout(t); };
+  }, [publicMint, side, buyIn, sellIn]);
+
   const mcNow = live ? Number(live.virtualSol) * TOKEN_TOTAL_SUPPLY / Number(live.virtualTok) / LAMPORTS : 0;
+  const livePrice = live
+    ? Number(live.virtualSol) / Number(live.virtualTok) * 10 ** TOKEN_DECIMALS / LAMPORTS
+    : 0;
   const rep = useMemo(() => (hist ? replayMcap(hist) : null), [hist]);
-  const candles = useMemo(() => {
-    if (!rep || !live) return [];
-    const m = solUsd ?? 1;
-    return buildCandles(rep.pts, mcNow).map((k) => ({
-      time: k.time, open: k.open * m, high: k.high * m, low: k.low * m, close: k.close * m,
-    }));
-  }, [rep, live, solUsd, mcNow]);
   const stats = useMemo(() => {
     const s = { buys: 0, sells: 0, buyVol: 0, sellVol: 0, buyers: 0, sellers: 0, deposited: 0 };
     if (!hist || !rep) return s;
@@ -163,42 +249,59 @@ export default function LaunchPage() {
   }, [hist, rep]);
   const usd = (lamports: number) => (solUsd ? ` ($${(lamports / LAMPORTS * solUsd).toFixed(2)})` : '');
 
-  if (!Number.isInteger(id)) return <main className="wrap"><p className="empty">bad launch id</p></main>;
   if (gone && !live) return <main className="wrap"><p className="empty">no such market</p></main>;
-  if (!live) return <main className="wrap"><p className="empty">loading market…</p></main>;
+  if (id === null || !live) return <main className="wrap"><p className="empty">loading market…</p></main>;
 
   const l = live;
-  const pct = Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100);
-  const mc = mcNow;
-  const spotPerTok = Number(l.virtualSol) / Number(l.virtualTok) * 10 ** TOKEN_DECIMALS; // lamports per display token
-  const now = Math.floor(Date.now() / 1000);
-  const inFirstWindow = l.state === 0 && now - l.createdTs < 60;
-  const tradable = l.state === 0 && l.dark;
+  const onPool = l.state === 3;
+  const pct = onPool ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100);
+  const mc = onPool && poolSpot ? poolSpot.mcSol : mcNow;
+  const spotPerTok = onPool && poolSpot
+    ? poolSpot.solPerToken * LAMPORTS
+    : Number(l.virtualSol) / Number(l.virtualTok) * 10 ** TOKEN_DECIMALS; // lamports per display token
+  const tradable = (l.state === 0 && l.dark) || onPool;
 
   // escrow available for buys = deposit + proceeds − spent
   const avail = pos ? pos.deposit + pos.solProceeds - pos.solSpent : 0;
   const net = pos ? pos.solProceeds - pos.solSpent : 0;
 
   const buyLamports = Math.round((Number.parseFloat(buyIn) || 0) * LAMPORTS);
-  const buyOut = buyLamports > 0 ? buyQuote(l.virtualSol, l.virtualTok, BigInt(buyLamports)) : 0n;
+  const buyOut = onPool
+    ? (side === 'buy' && poolQuote ? BigInt(poolQuote.amountOut) : 0n)
+    : (buyLamports > 0 ? buyQuote(l.virtualSol, l.virtualTok, BigInt(buyLamports)) : 0n);
   // a buy past the free escrow tops the escrow up from the wallet first —
-  // the program floor for a top-up is MIN_DEPOSIT
+  // the program floor for a top-up is MIN_DEPOSIT. matches quickBuy.
   const shortfall = pos && buyLamports > avail ? Math.max(buyLamports - avail, MIN_DEPOSIT) : 0;
   const walletCovers = bal !== null && bal >= shortfall + 5e6; // margin for fees + note rent
-  // the L1 escrow leg is the slow one — when it must run anyway, raise by
-  // one extra buy of the same size (wallet affording), so the NEXT big buy
-  // stays inside escrow and rides the rollup alone
-  const raise = shortfall > 0 && bal !== null && bal >= shortfall + buyLamports + 5e6
-    ? shortfall + buyLamports : shortfall;
   const sellRawWanted = BigInt(Math.round((Number.parseFloat(sellIn) || 0) * 10 ** TOKEN_DECIMALS));
-  const sellRaw = pos && sellRawWanted > pos.tokensHeld ? pos.tokensHeld : sellRawWanted;
-  const sellOut = sellRaw > 0n ? sellQuote(l.virtualSol, l.virtualTok, sellRaw) : 0n;
+  const sellHeld = onPool ? spl : (pos?.tokensHeld ?? 0n);
+  const sellRaw = sellRawWanted > sellHeld ? sellHeld : sellRawWanted;
+  const sellOut = onPool
+    ? (side === 'sell' && poolQuote ? BigInt(poolQuote.amountOut) : 0n)
+    : (sellRaw > 0n ? sellQuote(l.virtualSol, l.virtualTok, sellRaw) : 0n);
 
   const run = (label: string, fn: () => Promise<unknown>) => async () => {
     setErr(''); setOk(''); setBusy(label);
     try { await fn(); setOk(`${label} confirmed`); await refresh(); refreshBal(); }
     catch (e: any) { setErr(String(e?.message ?? e)); }
     setBusy('');
+  };
+
+  const pickBuy = (v: number) => {
+    setBuyIn(String(v));
+    writeBuyPreset(v);
+  };
+
+  const paintYou = (nextPos: PositionView) => {
+    if (!publicKey) return;
+    const me = publicKey.toBase58();
+    setHolders((prev) => {
+      const rest = (prev ?? []).filter((row) => row.trader !== me);
+      const rows = [{ trader: me, pos: nextPos }, ...rest];
+      rows.sort((x, y) => (y.pos.tokensHeld > x.pos.tokensHeld ? 1 : y.pos.tokensHeld < x.pos.tokensHeld ? -1 : 0));
+      holdersRef.current = new Map(rows.map((row) => [row.trader, row.pos]));
+      return rows;
+    });
   };
 
   const isCreator = publicKey !== null && publicKey.toBase58() === l.creator;
@@ -221,7 +324,6 @@ export default function LaunchPage() {
     setMeta(null); // landed but not indexed yet; the next visit picks it up
   });
 
-  const depositLamports = Math.round((Number.parseFloat(depositIn) || 0) * LAMPORTS);
   const chip = l.state === 0
     ? (SHOW_DARK_CHIP
       ? (l.dark ? <span className="chip dark">DARK</span> : <span className="chip">BONDING</span>)
@@ -229,320 +331,452 @@ export default function LaunchPage() {
     : l.state === 3 ? <span className="chip grad">GRADUATED</span>
       : <span className="chip frozen">{STATE[l.state]}</span>;
 
+  const mcUsd = solUsd ? mc * solUsd : null;
+  const mcLabel = mcUsd != null
+    ? (mcUsd >= 1000 ? `$${Math.round(mcUsd).toLocaleString('en-US')}` : `$${mcUsd.toFixed(0)}`)
+    : `${mc.toFixed(1)}◎`;
+  const chg = rep && rep.pts.length >= 2 && rep.pts[0].mcapSol
+    ? (rep.pts[rep.pts.length - 1].mcapSol - rep.pts[0].mcapSol) / rep.pts[0].mcapSol
+    : 0;
+  const volAll = stats.buyVol + stats.sellVol;
+  const buyShare = volAll > 0 ? stats.buyVol / volAll : 0.5;
+  const heldUi = Number(sellHeld) / 10 ** TOKEN_DECIMALS;
+  const buyBlocked = onPool
+    ? (!!busy || buyLamports <= 0 || !poolQuote || (bal !== null && bal < buyLamports + 5e6))
+    : (!!busy || buyLamports <= 0
+      || (shortfall > 0 && !walletCovers)
+      || (!pos && bal !== null && bal < Math.max(buyLamports, MIN_DEPOSIT) + 5e6));
+  const sellBlocked = onPool
+    ? (!!busy || sellRaw <= 0n || spl === 0n || !poolQuote)
+    : (!!busy || !pos || sellRaw <= 0n || pos.tokensHeld === 0n || pos.reconciled);
+
+  const copyMint = async () => {
+    if (!await copyText(l.mint)) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+
+  const doBuy = run('buy', async () => {
+    if (!publicKey) throw new Error('connect a wallet');
+    if (onPool) {
+      const tx = await meteoraSwapTx(l.mint, 'buy', String(buyLamports), publicKey.toBase58());
+      await sendWithWallet(wallet, tx);
+      return;
+    }
+    const you = publicKey.toBase58();
+    const depositAdd = escrowDepositAdd(pos, buyLamports, avail);
+    const baselineVs = l.virtualSol;
+    await quickBuy(wallet, id, buyLamports, (phase) => {
+      setBusy(phase === 'session' ? 'session open' : phase === 'top-up' ? 'top-up' : 'buy');
+    });
+    const next = bumpBuy(l, pos, buyLamports, buyOut, depositAdd);
+    const row: HistRow = {
+      sig: `local:${Date.now()}`, at: Date.now(), er: true,
+      kind: 'BUY', signer: you, actor: you, sol: buyLamports,
+    };
+    pendingRef.current = pushPending(pendingRef.current, baselineVs, next.pos, row);
+    setLive(next.live);
+    setPos(next.pos);
+    posRef.current = next.pos;
+    setHist((prev) => mergeHist(prev ?? [], [row]));
+    paintYou(next.pos);
+  });
+
+  const doSell = run('sell', async () => {
+    if (!publicKey) throw new Error('connect a wallet');
+    if (onPool) {
+      if (sellRaw <= 0n) throw new Error('nothing to sell');
+      const tx = await meteoraSwapTx(l.mint, 'sell', sellRaw.toString(), publicKey.toBase58());
+      await sendWithWallet(wallet, tx);
+      return;
+    }
+    const you = publicKey.toBase58();
+    const out = Number(sellOut);
+    const baselineVs = l.virtualSol;
+    await sellLive(wallet, id, sellRaw.toString());
+    const next = bumpSell(l, pos!, sellRaw, out);
+    const row: HistRow = {
+      sig: `local:${Date.now()}`, at: Date.now(), er: true,
+      kind: 'SELL', signer: you, actor: you, tok: Number(sellRaw),
+    };
+    pendingRef.current = pushPending(pendingRef.current, baselineVs, next.pos, row);
+    setLive(next.live);
+    setPos(next.pos);
+    posRef.current = next.pos;
+    setHist((prev) => mergeHist(prev ?? [], [row]));
+    paintYou(next.pos);
+  });
+
   return (
-    <main className="wrap">
-      <div className="trade-grid">
-        <section>
-          <div className="panel">
-            <div className="lhead">
-              <TokenArt id={id} creator={l.creator} symbol={l.symbol} size={52} />
-              <div className="lbody">
-                <div className="ltitle">
-                  <span className="lname">{l.name}</span>
-                  <span className="mono magic">${l.symbol}</span>
-                  {chip}
-                  <a
-                    className="mono faint lmint" title={l.mint}
-                    href={`https://solscan.io/token/${l.mint}?cluster=devnet`} target="_blank" rel="noreferrer"
-                  >
-                    mint {short(l.mint)} ↗
-                  </a>
-                </div>
-                {meta?.description && (
-                  <p className="dim" style={{ fontSize: 12, marginTop: 2 }}>{meta.description}</p>
-                )}
-                {(meta?.twitter || meta?.telegram || meta?.website) && (
-                  <div className="linkchips">
-                    {meta.twitter && <a href={meta.twitter} target="_blank" rel="noreferrer">twitter ↗</a>}
-                    {meta.telegram && <a href={meta.telegram} target="_blank" rel="noreferrer">telegram ↗</a>}
-                    {meta.website && <a href={meta.website} target="_blank" rel="noreferrer">website ↗</a>}
-                  </div>
-                )}
+    <main className="term">
+      <div className="term-grid">
+          <header className="term-head">
+            <TokenArt id={id} creator={l.creator} symbol={l.symbol} size={56} />
+            <div className="term-id">
+              <div className="term-name">
+                ${l.symbol}
+                {chip}
+              </div>
+              <div className="term-sub">
+                <span>{l.name}</span>
+                <span>{fmtAge(l.createdTs)} ago</span>
+                <span>{l.sessionsOpened} traders</span>
               </div>
             </div>
-            <div className="kv" style={{ marginTop: 10 }}>
-              <span className="k">market cap</span>
-              <span className="mono">
-                {mc.toFixed(2)}◎{solUsd ? ` ($${Math.round(mc * solUsd).toLocaleString('en-US')})` : ''}
-              </span>
+            <div className="term-mc">
+              <span className="k">Market cap</span>
+              <b>{mcLabel}</b>
+              <em>
+                {l.state === 3
+                  ? `${mc.toFixed(2)}◎ · graduated`
+                  : `${mc.toFixed(2)}◎ · ${pct.toFixed(1)}% to graduate`}
+              </em>
             </div>
-            <div className="kv">
-              <span className="k">spot</span>
-              <span className="mono">{(spotPerTok / LAMPORTS).toFixed(9)}◎ / {l.symbol}</span>
-            </div>
-            <div className="kv">
-              <span className="k">raised</span>
-              <span className="mono">{fmtSol(l.realSolRaised)}◎ / {fmtSol(GRADUATION_LAMPORTS, 0)}◎</span>
-            </div>
-            <div className="kv">
-              <span className="k">bonding progress</span>
-              <span className={`mono${pct >= 60 ? ' green' : ''}`}>{pct.toFixed(1)}%</span>
-            </div>
-            <div className="kv">
-              <span className="k">to graduate</span>
-              <span className="mono">
-                {l.realSolRaised >= GRADUATION_LAMPORTS
-                  ? 'ready'
-                  : `${fmtSol(GRADUATION_LAMPORTS - l.realSolRaised)}◎ more${usd(GRADUATION_LAMPORTS - l.realSolRaised)}`}
-              </span>
-            </div>
-            <div className="kv">
-              <span className="k">tokens sold</span><span className="mono">{fmtTok(l.tokensSold)}</span>
-            </div>
-            <div className="kv">
-              <span className="k">traders</span><span className="mono">{l.sessionsOpened}</span>
-            </div>
-            <div className={`bar${pct >= 60 ? ' hot' : ''}`} style={{ marginTop: 10 }}>
-              <i style={{ width: `${pct}%` }} />
-            </div>
-            <p className="note">
-              {l.state === 0 && l.dark && 'Bonding dark inside the Ephemeral Rollup. On L1 this mint has zero supply and zero trades — nothing to snipe.'}
-              {l.state === 0 && !l.dark && 'Bonding but not delegated — trades open once it goes dark.'}
-              {l.state === 1 && 'Frozen. The keeper is committing state home and reconciling sessions.'}
-              {l.state === 2 && 'Reconciled. Tokens are being claimed to traders, rakeback paid on losses.'}
-              {l.state === 3 && 'Graduated. Liquidity moves to the DEX; tokens are in traders’ wallets.'}
-            </p>
-            {inFirstWindow && (
-              <p className="note gold">
-                first window: buys capped at {fmtSol(FIRST_WINDOW_MAX_BUY, 1)}◎ gross per session for the first 60s
-              </p>
-            )}
-          </div>
-
-          <div className="panel gap">
-            <h3>
-              market cap chart{' '}
-              <span className="faint">{solUsd ? `(USD, SOL at $${solUsd.toFixed(0)})` : '(SOL)'}</span>
-            </h3>
-            <CurveChart candles={candles} />
-          </div>
-
-          <div className="panel gap">
-            <h3>bonding totals</h3>
-            <div className="kv"><span className="k">buys / sells</span>
-              <span className="mono"><span className="green">{stats.buys}</span> / <span className="red">{stats.sells}</span></span></div>
-            <div className="kv"><span className="k">buy volume</span>
-              <span className="mono green">{fmtSol(stats.buyVol)}◎{usd(stats.buyVol)}</span></div>
-            <div className="kv"><span className="k">sell volume</span>
-              <span className="mono red">{fmtSol(stats.sellVol)}◎{usd(stats.sellVol)}</span></div>
-            <div className="kv"><span className="k">buyers / sellers</span>
-              <span className="mono">{stats.buyers} / {stats.sellers}</span></div>
-            <div className="kv"><span className="k">escrow deposited</span>
-              <span className="mono">{fmtSol(stats.deposited)}◎{usd(stats.deposited)}</span></div>
-          </div>
-
-          <div className="panel gap">
-            <h3>history <span className="faint">(deposits on L1, dark trades read from the rollup ledger)</span></h3>
-            <div className="feed">
-              {(!hist || hist.length === 0) && (
-                <div className="empty" style={{ padding: 18 }}>
-                  {!hist ? 'reading the ledgers…'
-                    : l.tokensSold > 0
-                      ? `the curve moved before history reached back: ${fmtTok(l.tokensSold)} ${l.symbol} sold, ${fmtSol(l.realSolRaised)}◎ in`
-                      : 'no activity yet'}
-                </div>
+            <div className="term-links">
+              {meta?.twitter && (
+                <a href={meta.twitter} target="_blank" rel="noreferrer" aria-label="x"><Glyph n="x" size={12} /></a>
               )}
-              {hist?.map((e) => (
-                <div className="t mono" key={`${e.sig}:${e.kind}`}>
-                  <span className={e.kind === 'BUY' ? 'green' : e.kind === 'SELL' ? 'red' : e.kind === 'DEPOSIT' || e.kind === 'TOPUP' ? 'magic' : 'faint'}>
-                    {e.kind === 'TOPUP' ? 'TOP-UP' : e.kind}
-                  </span>
-                  <span>
-                    {e.sol !== undefined ? `${fmtSol(e.sol, 4)}◎`
-                      : e.tok !== undefined ? `${fmtTok(e.tok)} ${l.symbol}` : ''}
-                  </span>
-                  <a className="dim" title={e.actor} href={solscanAccount(e.actor)} target="_blank" rel="noreferrer">
-                    {short(e.actor)}
-                  </a>
-                  {e.er ? (
-                    <span className="faint" style={{ marginLeft: 'auto' }}
-                      title="dark trade: it lives on the rollup ledger, Solscan never sees it">
-                      {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })}
-                    </span>
-                  ) : (
-                    <a className="faint" style={{ marginLeft: 'auto' }} title="view tx on Solscan"
-                      href={solscanTx(e.sig)} target="_blank" rel="noreferrer">
-                      {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })} ↗
-                    </a>
-                  )}
-                </div>
-              ))}
+              {meta?.telegram && (
+                <a href={meta.telegram} target="_blank" rel="noreferrer" aria-label="tg"><Glyph n="tg" size={12} /></a>
+              )}
+              {meta?.website && (
+                <a href={meta.website} target="_blank" rel="noreferrer" aria-label="web"><Glyph n="web" size={12} /></a>
+              )}
+              <button onClick={copyMint} aria-label="copy mint" title={l.mint}>
+                <Glyph n="copy" size={12} />
+              </button>
+              <a href={`https://solscan.io/token/${l.mint}?cluster=devnet`} target="_blank" rel="noreferrer"
+                aria-label="mint on solscan" title={l.mint}>
+                <Glyph n="out" size={12} />
+              </a>
+              {onPool && poolSpot?.pool && (
+                <a href={meteoraPoolUrl(poolSpot.pool)} target="_blank" rel="noreferrer"
+                  aria-label="meteora pool" title={poolSpot.pool} className="faint">
+                  pool
+                </a>
+              )}
             </div>
+          </header>
+        <section className="term-main">
+          {copied && <p className="ok" style={{ margin: '0 0 8px' }}>mint copied</p>}
+          <div className="chart-pane">
+            <CurveChart
+              pts={rep?.pts ?? []}
+              liveMcap={mcNow}
+              livePrice={livePrice}
+              solUsd={solUsd}
+            />
+            <div className={`bar${pct >= 60 ? ' hot' : ''}`}><i style={{ width: `${pct}%` }} /></div>
           </div>
 
-          <div className="panel gap">
-            <h3>holders <span className="faint">(live session ledgers)</span></h3>
-            <div className="feed">
+          <div className="term-under">
+            <div className="panel">
+              <h3>holders <span className="faint">{onPool ? (splHolds?.length ?? 0) : (holders?.length ?? 0)}</span></h3>
+              {onPool ? (
+                <>
+                  {(!splHolds || splHolds.length === 0) && (
+                    <div className="empty" style={{ padding: 12 }}>no token accounts yet</div>
+                  )}
+                  {splHolds && splHolds.length > 0 && (
+                    <table className="holdtbl">
+                      <thead>
+                        <tr>
+                          <th>Holder</th>
+                          <th>Amount</th>
+                          <th>% supply</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {splHolds.map((row) => {
+                          const sup = Number(poolSpot?.supply ?? TOKEN_TOTAL_SUPPLY);
+                          const you = publicKey?.toBase58() === row.owner;
+                          return (
+                            <tr key={row.owner}>
+                              <td>
+                                <a className={`mono${you ? ' you' : ''}`} title={row.owner}
+                                  href={solscanAccount(row.owner)} target="_blank" rel="noreferrer">
+                                  {short(row.owner)}{you ? ' (you)' : ''}
+                                </a>
+                              </td>
+                              <td className="mono">{fmtTok(row.amount)}</td>
+                              <td className="mono faint">{sup > 0 ? (Number(row.amount) / sup * 100).toFixed(2) : '—' }%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </>
+              ) : (
+                <>
               {(!holders || holders.length === 0) && (
                 <div className="empty" style={{ padding: 12 }}>no open sessions yet</div>
               )}
-              {holders?.map((row) => {
-                const hn = row.pos.solProceeds - row.pos.solSpent;
-                const supPct = Number(row.pos.tokensHeld) / TOKEN_TOTAL_SUPPLY * 100;
-                const you = publicKey?.toBase58() === row.trader;
-                return (
-                  <div className="t mono" key={row.trader}>
-                    <a className={you ? 'magic' : ''} title={row.trader}
-                      href={solscanAccount(row.trader)} target="_blank" rel="noreferrer">
-                      {short(row.trader)}{you ? ' (you)' : ''}
-                    </a>
-                    <span>{fmtTok(row.pos.tokensHeld)} {l.symbol}</span>
-                    <span className="faint">{supPct.toFixed(2)}% supply</span>
-                    <span className={hn > 0 ? 'green' : hn < 0 ? 'red' : 'dim'} style={{ marginLeft: 'auto' }}>
-                      {hn >= 0 ? '+' : '−'}{fmtSol(Math.abs(hn), 4)}◎
-                    </span>
+              {holders && holders.length > 0 && (
+                <table className="holdtbl">
+                  <thead>
+                    <tr>
+                      <th>Holder</th>
+                      <th>Position</th>
+                      <th>PnL</th>
+                      <th>% supply</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {holders.map((row) => {
+                      const hn = row.pos.solProceeds - row.pos.solSpent;
+                      const supPct = Number(row.pos.tokensHeld) / TOKEN_TOTAL_SUPPLY * 100;
+                      const you = publicKey?.toBase58() === row.trader;
+                      return (
+                        <tr key={row.trader}>
+                          <td>
+                            <a className={`mono${you ? ' you' : ''}`} title={row.trader}
+                              href={solscanAccount(row.trader)} target="_blank" rel="noreferrer">
+                              {short(row.trader)}{you ? ' (you)' : ''}
+                            </a>
+                          </td>
+                          <td className="mono">{fmtTok(row.pos.tokensHeld)}</td>
+                          <td className={`mono ${hn > 0 ? 'green' : hn < 0 ? 'red' : 'dim'}`}>
+                            {hn >= 0 ? '+' : '−'}{fmtSol(Math.abs(hn), 4)}◎
+                          </td>
+                          <td className="mono faint">{supPct.toFixed(2)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+                </>
+              )}
+            </div>
+            <div className="panel">
+              <h3>trades</h3>
+              <div className="feed">
+                {(!hist || hist.length === 0) && (
+                  <div className="empty" style={{ padding: 12 }}>
+                    {!hist ? 'reading the ledgers…'
+                      : l.tokensSold > 0
+                        ? `the curve moved before history reached back: ${fmtTok(l.tokensSold)} ${l.symbol} sold`
+                        : 'no activity yet'}
                   </div>
-                );
-              })}
+                )}
+                {hist?.map((e) => (
+                  <div className="t mono" key={`${e.sig}:${e.kind}`}>
+                    <span className={e.kind === 'BUY' ? 'green' : e.kind === 'SELL' ? 'red' : e.kind === 'DEPOSIT' || e.kind === 'TOPUP' ? 'magic' : 'faint'}>
+                      {e.kind === 'TOPUP' ? 'TOP-UP' : e.kind}
+                    </span>
+                    <span>
+                      {e.sol !== undefined ? `${fmtSol(e.sol, 4)}◎`
+                        : e.tok !== undefined ? `${fmtTok(e.tok)} ${l.symbol}` : ''}
+                    </span>
+                    <a className="dim" title={e.actor} href={solscanAccount(e.actor)} target="_blank" rel="noreferrer">
+                      {short(e.actor)}
+                    </a>
+                    {e.er ? (
+                      <span className="faint" style={{ marginLeft: 'auto' }}
+                        title="dark trade: it lives on the rollup ledger, Solscan never sees it">
+                        {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })}
+                      </span>
+                    ) : (
+                      <a className="faint" style={{ marginLeft: 'auto' }} title="view tx on Solscan"
+                        href={solscanTx(e.sig)} target="_blank" rel="noreferrer">
+                        {new Date(e.at).toLocaleTimeString('en-US', { hour12: false })} ↗
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </section>
 
-        <section>
-          {!pos && !publicKey && (
-            <div className="panel">
-              <h3>trade this market</h3>
+        <aside className="term-side">
+          <div className="trade-card">
+            {onPool && (
               <p className="note" style={{ marginTop: 0 }}>
-                {privyEnabled ? 'Log in or connect a wallet' : 'Connect a wallet'} (top right)
-                to open a session. One approval escrows your stake; every trade after that is
-                gasless — no popups, no fees.
+                Live on Meteora — same buy/sell, wallet signs the swap.
               </p>
+            )}
+            <div className="sides">
+              <button className={side === 'buy' ? 'on buy' : ''} onClick={() => setSide('buy')}>Buy</button>
+              <button className={side === 'sell' ? 'on sell' : ''} onClick={() => setSide('sell')}>Sell</button>
             </div>
-          )}
-          {!pos && publicKey && (
-            <div className="panel">
-              <h3>open a session</h3>
-              <p className="note" style={{ marginTop: 0 }}>
-                Your wallet approves one transaction: it escrows your stake and hands a throwaway
-                session key to the ER. Every trade after that is gasless — no popups.
-              </p>
-              <div className="field">
-                <label>deposit (min {fmtSol(MIN_DEPOSIT, 2)}◎ · balance {bal === null ? '…' : `${fmtSol(bal)}◎`})</label>
-                <input value={depositIn} onChange={(e) => setDepositIn(e.target.value)} inputMode="decimal" />
-              </div>
-              <button
-                className="btn" style={{ width: '100%' }}
-                disabled={!!busy || !tradable || depositLamports < MIN_DEPOSIT || bal === null || bal < depositLamports + 5e6}
-                onClick={run('session open', () => ensureTradeSession(wallet, id, depositLamports))}
-              >
-                {busy === 'session open' ? 'waiting for wallet…' : `Deposit ${fmtSol(depositLamports)}◎ & go dark`}
-              </button>
-              {!tradable && <p className="note">this market is not tradable ({l.dark ? STATE[l.state] : 'not delegated'})</p>}
-              {tradable && bal !== null && bal < depositLamports + 5e6 && (
-                <p className="note">not enough devnet SOL for this deposit — top up or airdrop from the launch page</p>
-              )}
-            </div>
-          )}
 
-          {pos && (
-            <div className="panel">
-              <h3>your session</h3>
-              <div className="kv"><span className="k">deposit</span><span className="mono">{fmtSol(pos.deposit)}◎</span></div>
-              <div className="kv"><span className="k">available</span><span className="mono">{fmtSol(avail)}◎</span></div>
-              <div className="kv"><span className="k">holding</span><span className="mono">{fmtTok(pos.tokensHeld)} {l.symbol}</span></div>
-              <div className="kv">
-                <span className="k">realized net</span>
-                <span className={`mono ${net > 0 ? 'green' : net < 0 ? 'red' : ''}`}>
-                  {net >= 0 ? '+' : '−'}{fmtSol(Math.abs(net), 4)}◎
-                </span>
-              </div>
-              {pos.realizedLoss > 0 && (
-                <div className="kv">
-                  <span className="k">rakeback owed</span>
-                  <span className="mono green">{fmtSol(Math.floor(pos.realizedLoss / 10), 4)}◎</span>
+            {side === 'buy' ? (
+              <>
+                <div className="quote-out">
+                  <b className="green">{buyLamports > 0 ? fmtTok(buyOut) : '0'}</b>
+                  {l.symbol}
                 </div>
-              )}
-              {pos.reconciled && (
-                <p className="ok">settled — escrow returned; token claims and rakeback are cranked automatically</p>
-              )}
-            </div>
-          )}
-
-          {pos && !pos.reconciled && tradable && (
-            <>
-              <div className="panel gap">
-                <h3>buy <span className="faint">gasless · zero fee</span></h3>
-                <div className="field">
-                  <label>spend (SOL)</label>
-                  <input value={buyIn} onChange={(e) => setBuyIn(e.target.value)} inputMode="decimal" />
-                </div>
-                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                  {['0.1', '0.5', '1'].map((v) => (
-                    <button key={v} className="btn ghost" style={{ flex: 1, padding: '4px 0', fontSize: 11 }}
-                      onClick={() => setBuyIn(v)}>{v}◎</button>
+                {!publicKey ? (
+                  <button className="btn fire" onClick={wallet.connect}>
+                    Connect wallet to trade
+                  </button>
+                ) : (
+                  <button
+                    className="btn fire"
+                    disabled={!tradable || pos?.reconciled || buyBlocked}
+                    onClick={doBuy}
+                  >
+                    {busy === 'session open' || busy === 'top-up'
+                      ? 'raising escrow…'
+                      : busy === 'buy' ? 'buying…'
+                        : !tradable ? (onPool && poolErr ? poolErr.slice(0, 40) : 'not tradable')
+                          : `Buy ${l.symbol}`}
+                  </button>
+                )}
+                <div className="presets">
+                  {BUY_PRESETS.map((v) => (
+                    <button
+                      key={v}
+                      className={`preset mono${Number(buyIn) === v ? ' on' : ''}`}
+                      onClick={() => pickBuy(v)}
+                    >
+                      {v}◎
+                    </button>
                   ))}
                 </div>
-                <div className="kv"><span className="k">you get</span>
-                  <span className="mono green">{fmtTok(buyOut)} {l.symbol}</span></div>
-                <button
-                  className="btn buy" style={{ width: '100%', marginTop: 6 }}
-                  disabled={!!busy || !publicKey || buyLamports <= 0 || (shortfall > 0 && !walletCovers)}
-                  onClick={run('buy', async () => {
-                    if (shortfall > 0) {
-                      setBusy('top-up');
-                      await topUpSession(wallet, id, raise);
-                      setBusy('buy');
-                    }
-                    await buyLive(wallet, id, buyLamports);
-                  })}
-                >
-                  {busy === 'top-up' ? 'raising escrow…' : busy === 'buy' ? 'buying…' : `Buy ${l.symbol}`}
-                </button>
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label>spend (SOL){bal !== null ? ` · wallet ${fmtSol(bal)}◎` : ''}</label>
+                  <input value={buyIn} onChange={(e) => setBuyIn(e.target.value)} inputMode="decimal" />
+                </div>
+                {!onPool && !pos && publicKey && tradable && (
+                  <p className="note">first click opens the escrow for this size, then fills are gasless.</p>
+                )}
+                {onPool && poolErr && side === 'buy' && (
+                  <p className="err">{poolErr}</p>
+                )}
                 {shortfall > 0 && walletCovers && (
                   <p className="note">
-                    over your free escrow ({fmtSol(avail)}◎). this buy first moves{' '}
-                    {fmtSol(raise)}◎ from wallet to escrow{raise > shortfall
-                      ? ', sized so your next buy this big skips the wait' : ''}, then runs
-                    gasless as usual.
+                    over free escrow ({fmtSol(avail)}◎) — moves {fmtSol(shortfall)}◎ from wallet first.
                   </p>
                 )}
                 {shortfall > 0 && !walletCovers && (
                   <p className="err">
-                    {bal === null ? 'connect a wallet' : `your wallet holds ${fmtSol(bal)}◎`} — this
-                    buy needs {fmtSol(shortfall)}◎ on top of your free {fmtSol(avail)}◎ escrow.
+                    {bal === null ? 'connect a wallet' : `wallet holds ${fmtSol(bal)}◎`} — need {fmtSol(shortfall)}◎ more.
                   </p>
                 )}
-              </div>
-
-              <div className="panel gap">
-                <h3>sell <span className="faint">gasless · zero fee</span></h3>
-                <div className="field">
-                  <label>
-                    amount ({l.symbol}) ·{' '}
-                    <a className="magic" style={{ cursor: 'pointer' }}
-                      onClick={() => setSellIn((Number(pos.tokensHeld) / 10 ** TOKEN_DECIMALS).toFixed(6))}>
-                      max {fmtTok(pos.tokensHeld)}
-                    </a>
-                  </label>
-                  <input value={sellIn} onChange={(e) => setSellIn(e.target.value)} inputMode="decimal" />
+              </>
+            ) : (
+              <>
+                <div className="quote-out">
+                  <b className="red">{sellRaw > 0n ? `${fmtSol(Number(sellOut), 4)}◎` : '0◎'}</b>
+                  you get
                 </div>
-                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                {!publicKey ? (
+                  <button className="btn fire sell" onClick={wallet.connect}>
+                    Connect wallet to trade
+                  </button>
+                ) : (
+                  <button className="btn fire sell" disabled={!tradable || sellBlocked} onClick={doSell}>
+                    {busy === 'sell' ? 'selling…' : sellHeld === 0n ? `no ${l.symbol}` : `Sell ${l.symbol}`}
+                  </button>
+                )}
+                <div className="pcts">
                   {[25, 50, 100].map((f) => (
-                    <button key={f} className="btn ghost" style={{ flex: 1, padding: '4px 0', fontSize: 11 }}
-                      onClick={() => setSellIn((Number(pos.tokensHeld) * f / 100 / 10 ** TOKEN_DECIMALS).toFixed(6))}>
+                    <button
+                      key={f}
+                      className="btn ghost"
+                      disabled={sellHeld === 0n}
+                      onClick={() => setSellIn(((Number(sellHeld) * f / 100) / 10 ** TOKEN_DECIMALS).toFixed(6))}
+                    >
                       {f}%
                     </button>
                   ))}
                 </div>
-                <div className="kv"><span className="k">you get</span>
-                  <span className="mono red">{fmtSol(Number(sellOut), 4)}◎</span></div>
-                <button
-                  className="btn sell" style={{ width: '100%', marginTop: 6 }}
-                  disabled={!!busy || !publicKey || sellRaw <= 0n || pos.tokensHeld === 0n}
-                  onClick={run('sell', () => sellLive(wallet, id, sellRaw.toString()))}
-                >
-                  {busy === 'sell' ? 'selling…' : `Sell ${l.symbol}`}
-                </button>
-              </div>
-            </>
-          )}
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label>
+                    amount ({l.symbol})
+                    {sellHeld > 0n && (
+                      <>
+                        {' · '}
+                        <a className="magic" style={{ cursor: 'pointer' }}
+                          onClick={() => setSellIn(heldUi.toFixed(6))}>
+                          max {fmtTok(sellHeld)}
+                        </a>
+                      </>
+                    )}
+                  </label>
+                  <input value={sellIn} onChange={(e) => setSellIn(e.target.value)} inputMode="decimal" />
+                </div>
+                {onPool && poolErr && side === 'sell' && (
+                  <p className="err">{poolErr}</p>
+                )}
+              </>
+            )}
 
-          {(err || ok) && (
-            <div className="panel gap">
-              {ok && <p className="ok" style={{ margin: 0 }}>{ok}</p>}
-              {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
+            {(err || ok) && (
+              <>
+                {ok && <p className="ok">{ok}</p>}
+                {err && <p className="err">{err}</p>}
+              </>
+            )}
+
+            {pos && pos.reconciled && !pos.tokensClaimed && pos.tokensHeld > 0n && (
+              <button
+                className="btn"
+                style={{ width: '100%', marginBottom: 10 }}
+                disabled={!!busy}
+                onClick={run('claim', async () => {
+                  if (!publicKey) throw new Error('connect a wallet');
+                  await claimTokens(wallet, id, publicKey);
+                })}
+              >
+                {busy === 'claim' ? 'claiming…' : `Claim ${fmtTok(pos.tokensHeld)} ${l.symbol} into wallet`}
+              </button>
+            )}
+            {onPool && spl > 0n && (
+              <div className="sess-strip">
+                <span>wallet <b>{fmtTok(spl)}</b> {l.symbol}</span>
+              </div>
+            )}
+            {!onPool && pos && (
+              <div className="sess-strip">
+                <span>holding <b>{fmtTok(pos.tokensHeld)}</b></span>
+                <span>avail <b>{fmtSol(avail)}◎</b></span>
+                <span>
+                  net{' '}
+                  <b className={net > 0 ? 'green' : net < 0 ? 'red' : ''}>
+                    {net >= 0 ? '+' : '−'}{fmtSol(Math.abs(net), 4)}◎
+                  </b>
+                </span>
+                {pos.reconciled && <span className="ok" style={{ margin: 0 }}>settled</span>}
+              </div>
+            )}
+          </div>
+
+          <div className="stats-card">
+            <h3>stats</h3>
+            <div className="volrow">
+              <span className={chg >= 0 ? 'green' : 'red'}>
+                {chg >= 0 ? '+' : ''}{(chg * 100).toFixed(1)}%
+              </span>
+              <span className="faint">vol {fmtSol(volAll)}◎{usd(volAll)}</span>
             </div>
-          )}
+            <div className="volrow">
+              <span className="green">{stats.buys} buys</span>
+              <span className="red">{stats.sells} sells</span>
+            </div>
+            <div className="volbar">
+              <i className="buy" style={{ width: `${Math.max(2, buyShare * 100)}%` }} />
+              <i className="sell" style={{ width: `${Math.max(2, (1 - buyShare) * 100)}%` }} />
+            </div>
+            <div className="volrow">
+              <span className="green">{fmtSol(stats.buyVol)}◎</span>
+              <span className="red">{fmtSol(stats.sellVol)}◎</span>
+            </div>
+            <div className="volrow">
+              <span>{stats.buyers} buyers</span>
+              <span>{stats.sellers} sellers</span>
+            </div>
+            <div className="athrow">
+              <span>MC {mc.toFixed(1)}◎</span>
+              <span>{l.state === 3 ? 'graduated' : `grad ${fmtSol(GRADUATION_LAMPORTS, 0)}◎`}</span>
+            </div>
+            <div className={`bar${pct >= 60 ? ' hot' : ''}`} style={{ marginTop: 6 }}>
+              <i style={{ width: `${pct}%` }} />
+            </div>
+          </div>
 
           {isCreator && meta === null && (
             <div className="panel gap">
@@ -563,9 +797,6 @@ export default function LaunchPage() {
               <button className="btn" disabled={!attachImage || busy !== ''} onClick={doAttach}>
                 {busy === 'attach' ? 'attaching…' : 'Attach image'}
               </button>
-              <p className="note">
-                pins to IPFS, then one wallet approval stamps the CID on-chain (fee only, no SOL moves)
-              </p>
             </div>
           )}
 
@@ -573,7 +804,7 @@ export default function LaunchPage() {
             <div className="panel gap">
               <h3>more markets</h3>
               {others.slice(0, 5).map((o) => (
-                <Link key={o.id} href={`/launch/${o.id}`} className="kv">
+                <Link key={o.id} href={`/launch/${o.mint}`} className="kv">
                   <span className="k" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <TokenArt id={o.id} creator={o.creator} symbol={o.symbol} size={22} />
                     {o.name} <span className="mono faint">${o.symbol}</span>
@@ -583,7 +814,7 @@ export default function LaunchPage() {
               ))}
             </div>
           )}
-        </section>
+        </aside>
       </div>
     </main>
   );

@@ -26,6 +26,8 @@ const P: Record<string, React.ReactNode> = {
     </>
   ),
   bolt: <path d="M13.5 2L4 13.6h6.4L10 22l9.5-11.6h-6.4z" fill="currentColor" stroke="none" />,
+  spark: <path d="M12 2l1.6 8.4L22 12l-8.4 1.6L12 22l-1.6-8.4L2 12l8.4-1.6z" fill="currentColor" stroke="none" />,
+  arrow: <path d="M5 12h12M13 6l6 6-6 6" />,
   out: (
     <>
       <path d="M15 4.5H4.5v15H15" />
