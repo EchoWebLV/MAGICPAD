@@ -15,7 +15,7 @@ import idl from './idl.json';
 
 export type HistKind =
   | 'LAUNCH' | 'DEPOSIT' | 'TOPUP' | 'BUY' | 'SELL'
-  | 'FREEZE' | 'SETTLED' | 'CLAIM' | 'RAKEBACK' | 'GRADUATED'
+  | 'FREEZE' | 'SETTLED' | 'CLAIM' | 'GRADUATED'
   | 'LOCKED' | 'POOL';
 
 export interface HistEvent {
@@ -71,7 +71,6 @@ function parseTx(tx: any, sig: string, er: boolean, c: Cache): HistEvent[] {
       case 'freeze_launch': out.push({ sig, at, er, kind: 'FREEZE', signer }); break;
       case 'reconcile_trade_session': out.push({ sig, at, er, kind: 'SETTLED', signer }); break;
       case 'claim_tokens': out.push({ sig, at, er, kind: 'CLAIM', signer }); break;
-      case 'claim_rakeback': out.push({ sig, at, er, kind: 'RAKEBACK', signer }); break;
       case 'graduate': out.push({ sig, at, er, kind: 'GRADUATED', signer }); break;
       case 'lock_mint': out.push({ sig, at, er, kind: 'LOCKED', signer }); break;
       case 'record_pool': out.push({ sig, at, er, kind: 'POOL', signer }); break;

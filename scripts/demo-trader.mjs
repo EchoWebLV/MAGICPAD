@@ -342,7 +342,7 @@ async function runPipeline(id) {
   }
 
   console.log(`\nE2E COMPLETE — launch ${id} bonded dark in the ER, froze, settled to the`);
-  console.log('lamport, paid the loser 10% back, and minted real SPL to the trader.');
+  console.log('lamport, and minted real SPL to the trader.');
   console.log(`wallet: ${sol(await conn.getBalance(wallet.publicKey))} · ${bal.value.uiAmountString} DARK`);
   console.log(`mint ${mint.toBase58()} · launch ${launch.toBase58()}`);
 }
