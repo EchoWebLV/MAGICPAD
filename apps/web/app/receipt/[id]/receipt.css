@@ -1,0 +1,78 @@
+/* The settlement receipt: a document, not a dashboard. Reads top to bottom
+ * like a proof — claim, evidence, method — and prints in black and white. */
+
+.rc { max-width: 980px; margin: 0 auto; padding: 48px var(--gut) 96px; }
+
+.rc-back { font-size: 12px; color: var(--faint); letter-spacing: 0.04em; }
+.rc-back:hover { color: var(--y); }
+
+.rc-head { margin: 22px 0 34px; }
+.rc-title { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.rc-title span { color: var(--dim); font-weight: 500; }
+.rc-sub { margin-top: 10px; font-size: 12px; color: var(--faint); word-break: break-all; }
+.rc-sub a:hover { color: var(--y); }
+
+.rc-verdict {
+  display: flex; gap: 16px; align-items: flex-start;
+  border: 1px solid var(--line); border-radius: var(--r);
+  padding: 20px 22px; background: var(--ink-2);
+}
+.rc-verdict.ok { border-color: var(--y-deep); background: var(--y-wash); }
+.rc-verdict.no { border-color: #5a2420; background: rgba(255, 93, 78, 0.08); }
+.rc-badge {
+  flex: none; font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+  padding: 7px 12px; border-radius: 999px; text-transform: uppercase;
+  background: var(--line); color: var(--dim);
+}
+.rc-verdict.ok .rc-badge { background: var(--y); color: #121212; }
+.rc-verdict.no .rc-badge { background: var(--down); color: #1a0f0e; }
+.rc-why { font-size: 14px; line-height: 1.55; color: var(--paper); }
+
+.rc-sec { margin-top: 40px; }
+.rc-h {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; margin-bottom: 6px;
+}
+.rc-h h2 { font-size: 13px; letter-spacing: 0.09em; text-transform: uppercase; font-weight: 700; }
+.rc-note { font-size: 12px; color: var(--faint); line-height: 1.6; margin-bottom: 14px; max-width: 72ch; }
+.rc-chk { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; }
+.rc-chk.y { color: var(--up); }
+.rc-chk.n { color: var(--down); }
+.rc-chk.q { color: var(--dim); }
+
+.rc-card { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--ink-2); overflow: hidden; }
+.rc-scroll { overflow-x: auto; }
+table.rc-t { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 620px; }
+table.rc-t th {
+  text-align: right; padding: 11px 14px; font-size: 10px; font-weight: 600;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint);
+  border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+table.rc-t th:first-child, table.rc-t td:first-child { text-align: left; }
+table.rc-t td { padding: 10px 14px; text-align: right; border-bottom: 1px solid var(--ink-3); white-space: nowrap; }
+table.rc-t tr:last-child td { border-bottom: 0; }
+table.rc-t tr.sum td { border-top: 1px solid var(--line); background: var(--ink-3); font-weight: 600; }
+.rc-t a:hover { color: var(--y); }
+
+.tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 3px 7px;
+  border-radius: 5px; background: var(--ink-3); color: var(--dim);
+}
+.tag.buy { background: rgba(61, 220, 138, 0.14); color: var(--up); }
+.tag.sell { background: rgba(255, 93, 78, 0.14); color: var(--down); }
+.tag.er { background: var(--y-wash); color: var(--y); }
+
+.rc-pair { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--line); }
+.rc-pair > div { background: var(--ink-2); padding: 14px 16px; }
+.rc-pair .k { font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint); }
+.rc-pair .v { font-size: 13px; margin-top: 5px; word-break: break-all; }
+@media (min-width: 760px) { .rc-pair { grid-template-columns: 1fr 1fr; } }
+
+.rc-how { border: 1px dashed var(--line-2); border-radius: var(--r-sm); padding: 18px 20px; }
+.rc-how p { font-size: 12px; color: var(--faint); line-height: 1.65; max-width: 74ch; }
+.rc-cmd {
+  margin-top: 12px; background: #000; border: 1px solid var(--line);
+  border-radius: 8px; padding: 12px 14px; font-size: 12px; color: var(--y);
+  overflow-x: auto; white-space: pre;
+}
+.rc-foot { margin-top: 44px; font-size: 11px; color: var(--faint); line-height: 1.7; }

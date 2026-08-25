@@ -15,3 +15,7 @@ apps/web/public/migrations.json
 
 # entry-gate co-signer — server-only secret
 gate.json
+.grok-artifacts/
+
+# local dev-server config for the preview pane
+.claude/

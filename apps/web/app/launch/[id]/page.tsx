@@ -455,6 +455,11 @@ export default function LaunchPage() {
                   pool
                 </a>
               )}
+              {/* the dark curve's audit trail, published once it stops */}
+              <a href={`/receipt/${l.mint}`} className="faint"
+                title="settlement receipt: every trade, replayed against the chain's own numbers">
+                receipt
+              </a>
             </div>
           </header>
         <section className="term-main">

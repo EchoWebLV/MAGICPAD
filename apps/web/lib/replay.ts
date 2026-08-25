@@ -1,5 +1,3 @@
-'use client';
-
 /* Deterministic curve replay. The bonding curve is pure math over
  * (virtual_sol, virtual_tok), so running the trade history through the
  * same quote functions the program uses reproduces the exact price after
@@ -9,8 +7,8 @@
 import {
   LAMPORTS, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, VIRTUAL_SOL_INIT as VS0, VIRTUAL_TOK_INIT as VT0,
   buyQuote, sellQuote,
-} from './magicpad';
-import { HistEvent } from './history';
+} from './core';
+import { HistEvent, HistRow } from './ledger';
 
 export interface PricePoint {
   at: number;       // ms
@@ -109,4 +107,44 @@ export function sma(candles: Candle[], period: number): { time: number; value: n
     if (i >= period - 1) out.push({ time: candles[i].time, value: sum / period });
   }
   return out;
+}
+
+export interface TraderLedger { spent: number; proceeds: number; tokensHeld: number }
+export interface LedgerReplay {
+  endVs: bigint;
+  endVt: bigint;
+  byTrader: Record<string, TraderLedger>;
+}
+
+/* Replay that also rebuilds each trader's ledger, not just the reserves.
+ *
+ * The reserves alone are a weaker check than they look: constant-product
+ * end state depends only on the SUM of buys and sells, so swapping two
+ * same-direction trades leaves them untouched. The per-trader ledger is
+ * what pins the sequence — a reordered sell fills at a different price
+ * (proceeds move) and a reordered buy receives a different number of
+ * tokens (tokensHeld moves). Checked against the TradeSession accounts
+ * the program actually settled on, the three together leave a published
+ * trade log nowhere to hide. */
+export function replayLedger(rows: HistRow[]): LedgerReplay {
+  let vs = VS0;
+  let vt = VT0;
+  const byTrader: Record<string, TraderLedger> = {};
+  const of = (a: string) => (byTrader[a] ??= { spent: 0, proceeds: 0, tokensHeld: 0 });
+  for (const e of [...rows].sort((a, b) => a.at - b.at || (a.slot ?? 0) - (b.slot ?? 0))) {
+    if (e.kind === 'BUY' && e.sol) {
+      const inn = BigInt(e.sol);
+      const out = buyQuote(vs, vt, inn);
+      vs += inn; vt -= out;
+      const t = of(e.actor);
+      t.spent += e.sol; t.tokensHeld += Number(out);
+    } else if (e.kind === 'SELL' && e.tok) {
+      const tin = BigInt(e.tok);
+      const out = sellQuote(vs, vt, tin);
+      vs -= out; vt += tin;
+      const t = of(e.actor);
+      t.proceeds += Number(out); t.tokensHeld -= e.tok;
+    }
+  }
+  return { endVs: vs, endVt: vt, byTrader };
 }

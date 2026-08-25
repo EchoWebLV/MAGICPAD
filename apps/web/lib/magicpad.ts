@@ -7,50 +7,25 @@
  * of a dark launch is a stale pre-delegation snapshot, so live curve
  * numbers come from the ER node the router points at. */
 
-import { AnchorProvider, BN, Program, utils } from '@coral-xyz/anchor';
-import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
+import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
+import { PublicKey } from '@solana/web3.js';
+import {
+  CONFIG, DLP, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, GATE, LAMPORTS,
+  PLATFORM, PROGRAM_ID, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, connection,
+  erConnection, erEndpointFor, launchFilter, launchPda, mintPda,
+} from './core';
 import idl from './idl.json';
 
-export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || clusterApiUrl('devnet');
-export const ROUTER = process.env.NEXT_PUBLIC_ROUTER_URL || 'https://devnet-router.magicblock.app';
-export const PROGRAM_ID = new PublicKey((idl as any).address);
-export const DLP = new PublicKey('DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh');
-export const MAGIC_PROGRAM = new PublicKey('Magic11111111111111111111111111111111111111');
-export const MAGIC_CONTEXT = new PublicKey('MagicContext1111111111111111111111111111111');
-export const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-
-export const LAMPORTS = 1_000_000_000;
-export const GRADUATION_LAMPORTS = 5 * LAMPORTS;
-export const TOKEN_DECIMALS = 6;
-export const TOKEN_TOTAL_SUPPLY = 1_000_000_000_000_000; // raw units
-export const MIN_DEPOSIT = 0.01 * LAMPORTS;
-// launch-time virtual reserves, from programs/magicpad/src/constants.rs —
-// a launch-tx dev buy quotes against EXACTLY these, so its fill is exact
-export const VIRTUAL_SOL_INIT = 30_000_000_000n;
-export const VIRTUAL_TOK_INIT = 1_073_000_000_000_000n;
-
-export const connection = new Connection(RPC_URL, {
-  commitment: 'confirmed', disableRetryOnRateLimit: true,
-});
-
-const pda = (...seeds: (Buffer | Uint8Array)[]) =>
-  PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
-export const PLATFORM = pda(Buffer.from('platform'));
-export const CONFIG = pda(Buffer.from('config'));
-export const GATE = pda(Buffer.from('gate'));
-export const ENV_LAUNCH_FEE_LAMPORTS = Number(process.env.NEXT_PUBLIC_LAUNCH_FEE_LAMPORTS || '0');
-export const ENV_LAUNCH_TAX_BPS = Number(process.env.NEXT_PUBLIC_LAUNCH_TAX_BPS || '0');
-export const launchPda = (id: number) =>
-  pda(Buffer.from('launch'), new BN(id).toArrayLike(Buffer, 'le', 8));
-export const mintPda = (id: number) =>
-  pda(Buffer.from('mint'), new BN(id).toArrayLike(Buffer, 'le', 8));
-export const sessionPda = (id: number, trader: PublicKey) =>
-  pda(Buffer.from('tsession'), new BN(id).toArrayLike(Buffer, 'le', 8), trader.toBuffer());
-export const topupPda = (id: number, trader: PublicKey, nonce: number) =>
-  pda(Buffer.from('topup'), new BN(id).toArrayLike(Buffer, 'le', 8), trader.toBuffer(),
-    new BN(nonce).toArrayLike(Buffer, 'le', 8));
-export const poolRecordPda = (mint: PublicKey) =>
-  pda(Buffer.from('pool'), mint.toBuffer());
+/* Constants, PDAs, curve math and the connection factories live in
+ * ./core so server code (the receipt route) can use them without
+ * crossing this file's client boundary. Re-exported here unchanged. */
+export {
+  RPC_URL, ROUTER, PROGRAM_ID, DLP, MAGIC_PROGRAM, MAGIC_CONTEXT, TOKEN_PROGRAM,
+  LAMPORTS, GRADUATION_LAMPORTS, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, MIN_DEPOSIT,
+  VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, connection, PLATFORM, CONFIG, GATE,
+  ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, launchPda, mintPda, sessionPda,
+  topupPda, poolRecordPda, buyQuote, sellQuote, erEndpointFor, erConnection,
+} from './core';
 
 // read-only program — tx building + decode only, never signs
 const deadWallet = {
@@ -161,34 +136,7 @@ function toView(id: number, l: any, dark: boolean): LaunchView {
   };
 }
 
-// ---- ER discovery (fqdn cache; misses negative-cached briefly so home
-// markets don't ping the router every poll tick) -----------------------------
-const fqdnCache = new Map<string, { fqdn: string | null; at: number }>();
-export async function erEndpointFor(account: PublicKey): Promise<string | null> {
-  const key = account.toBase58();
-  const hit = fqdnCache.get(key);
-  if (hit && (hit.fqdn || Date.now() - hit.at < 15_000)) return hit.fqdn;
-  try {
-    const r = await fetch(`${ROUTER}/getDelegationStatus`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getDelegationStatus', params: [key] }),
-    }).then((x) => x.json());
-    const fqdn = r?.result?.fqdn ?? null;
-    fqdnCache.set(key, { fqdn, at: Date.now() });
-    return fqdn;
-  } catch { return null; }
-}
-
-const erConns = new Map<string, Connection>();
-export function erConnection(fqdn: string): Connection {
-  let c = erConns.get(fqdn);
-  if (!c) { c = new Connection(fqdn, { commitment: 'confirmed', disableRetryOnRateLimit: true }); erConns.set(fqdn, c); }
-  return c;
-}
-
 // ---- fetchLaunches: dual sweep + live ER overlay, 2.5s memo ----------------
-const LAUNCH_DISC = Buffer.from((idl as any).accounts.find((a: any) => a.name === 'Launch').discriminator);
-const launchFilter = [{ memcmp: { offset: 0, bytes: utils.bytes.bs58.encode(LAUNCH_DISC) } }];
 
 let memo: { at: number; data: LaunchView[] } | null = null;
 let inflight: Promise<LaunchView[]> | null = null;
@@ -240,19 +188,6 @@ export async function fetchLaunches(): Promise<LaunchView[]> {
 }
 
 // ---- curve math, mirrored from curve.rs (BigInt, trader-adverse +1) --------
-export function buyQuote(vs: bigint, vt: bigint, solIn: bigint): bigint {
-  if (solIn === 0n) return 0n;
-  const k = vs * vt;
-  const nvt = k / (vs + solIn) + 1n;
-  return nvt >= vt ? 0n : vt - nvt;
-}
-export function sellQuote(vs: bigint, vt: bigint, tokIn: bigint): bigint {
-  if (tokIn === 0n) return 0n;
-  const k = vs * vt;
-  const nvs = k / (vt + tokIn) + 1n;
-  return nvs >= vs ? 0n : vs - nvs;
-}
-
 // spot price in lamports per raw unit → market cap over total supply, in SOL
 export function marketCapSol(l: LaunchView): number {
   return Number(l.virtualSol) * TOKEN_TOTAL_SUPPLY / Number(l.virtualTok) / LAMPORTS;

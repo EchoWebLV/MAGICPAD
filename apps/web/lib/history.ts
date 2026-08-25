@@ -1,39 +1,22 @@
 'use client';
 
-/* Reconstructed market history. Dark bonding leaves no L1 trade log by
- * design, but the money trail is still real: escrow deposits and
- * settlement are L1 transactions on the launch account, and the trades
- * themselves sit on the ER's own ledger. This module sweeps both, joins
- * ER session signers back to the trader wallets that registered them
- * (the deposit tx carries the session key), and remembers everything in
- * localStorage so history survives reloads and ER pruning. */
+/* The browser's view of a market's history: the shared sweep in ./ledger,
+ * plus a localStorage cache so the terminal survives reloads and ER
+ * pruning, and a tighter signature budget than the server takes. The ER
+ * is swept every call (gasless node, generous limits); the L1 sweep runs
+ * at most every 45s to stay polite to public devnet. For the whole,
+ * uncapped, shareable version of this same data see /api/receipt. */
 
-import { BorshInstructionCoder, utils } from '@coral-xyz/anchor';
-import { Connection, PublicKey } from '@solana/web3.js';
-import { PROGRAM_ID, connection, erConnection, erEndpointFor, launchPda } from './magicpad';
-import idl from './idl.json';
+import { connection, erConnection, erLedgerEndpoints, launchPda } from './core';
+import { HistEvent, HistKind, HistRow, sweepLayer } from './ledger';
 
-export type HistKind =
-  | 'LAUNCH' | 'DEPOSIT' | 'TOPUP' | 'BUY' | 'SELL'
-  | 'FREEZE' | 'SETTLED' | 'CLAIM' | 'GRADUATED'
-  | 'LOCKED' | 'POOL';
-
-export interface HistEvent {
-  sig: string;
-  at: number;      // ms
-  er: boolean;     // true = read from the rollup ledger
-  kind: HistKind;
-  signer: string;  // raw fee payer (session key for ER trades)
-  sol?: number;    // lamports
-  tok?: number;    // raw token units
-}
-export type HistRow = HistEvent & { actor: string };
-
-interface Cache { events: HistEvent[]; sk: Record<string, string>; seen: string[] }
+export type { HistEvent, HistKind, HistRow };
 
 const CKEY = (id: number) => `magicpad_hist_${id}`;
-const coder = new BorshInstructionCoder(idl as any);
-const bnNum = (v: any) => Number(v?.toString?.() ?? v);
+const UI_SIG_CAP = 40;   // newest N signatures per layer
+const UI_EVENT_CAP = 60; // rows kept in the terminal
+
+interface Cache { events: HistEvent[]; sk: Record<string, string>; seen: string[] }
 
 function load(id: number): Cache {
   try {
@@ -43,67 +26,17 @@ function load(id: number): Cache {
   return { events: [], sk: {}, seen: [] };
 }
 
-/** ALL activity in one tx — a buy-and-deploy creation carries LAUNCH,
- *  DEPOSIT, and BUY in a single signature, and the deposit leg must still
- *  register its session key or ER trades render as raw throwaway keys. */
-function parseTx(tx: any, sig: string, er: boolean, c: Cache): HistEvent[] {
-  const msg = tx.transaction.message;
-  const keys: PublicKey[] = msg.staticAccountKeys ?? msg.accountKeys;
-  const signer = keys[0].toBase58();
-  const at = (tx.blockTime ?? 0) * 1000;
-  const out: HistEvent[] = [];
-  for (const ix of msg.compiledInstructions ?? msg.instructions ?? []) {
-    const pid = keys[ix.programIdIndex];
-    if (!pid || !pid.equals(PROGRAM_ID)) continue;
-    const raw = typeof ix.data === 'string' ? utils.bytes.bs58.decode(ix.data) : ix.data;
-    let dec = null;
-    try { dec = coder.decode(Buffer.from(raw)); } catch { /* foreign layout */ }
-    if (!dec) continue;
-    const a: any = dec.data;
-    switch (dec.name) {
-      case 'create_launch': out.push({ sig, at, er, kind: 'LAUNCH', signer, sol: 1_000_000_000 }); break;
-      case 'open_trade_session':
-        c.sk[a.session_key.toBase58()] = signer;
-        out.push({ sig, at, er, kind: 'DEPOSIT', signer, sol: bnNum(a.deposit) }); break;
-      case 'top_up_session': out.push({ sig, at, er, kind: 'TOPUP', signer, sol: bnNum(a.amount) }); break;
-      case 'buy': out.push({ sig, at, er, kind: 'BUY', signer, sol: bnNum(a.amount_in) }); break;
-      case 'sell': out.push({ sig, at, er, kind: 'SELL', signer, tok: bnNum(a.tokens_in) }); break;
-      case 'freeze_launch': out.push({ sig, at, er, kind: 'FREEZE', signer }); break;
-      case 'reconcile_trade_session': out.push({ sig, at, er, kind: 'SETTLED', signer }); break;
-      case 'claim_tokens': out.push({ sig, at, er, kind: 'CLAIM', signer }); break;
-      case 'graduate': out.push({ sig, at, er, kind: 'GRADUATED', signer }); break;
-      case 'lock_mint': out.push({ sig, at, er, kind: 'LOCKED', signer }); break;
-      case 'record_pool': out.push({ sig, at, er, kind: 'POOL', signer }); break;
-      default: break; // delegate_* / commit_* are plumbing, not activity
-    }
-  }
-  return out;
-}
-
-async function sweep(conn: Connection, id: number, er: boolean, c: Cache, seen: Set<string>, gapMs: number) {
-  const sigs = await conn.getSignaturesForAddress(launchPda(id), { limit: 40 }, 'confirmed');
-  for (const s of [...sigs].reverse()) { // oldest first: deposits register session keys before their trades
-    if (seen.has(s.signature)) continue;
-    if (s.err) { seen.add(s.signature); continue; } // failed txs never touched the curve
-    const tx: any = await conn.getTransaction(s.signature, {
-      maxSupportedTransactionVersion: 0, commitment: 'confirmed',
-    });
-    if (!tx) continue; // not indexed yet — next poll
-    seen.add(s.signature);
-    for (const ev of parseTx(tx, s.signature, er, c)) {
-      if (!c.events.some((e) => e.sig === ev.sig && e.kind === ev.kind)) c.events.push(ev);
-    }
-    if (gapMs) await new Promise((r) => setTimeout(r, gapMs));
-  }
-}
-
 const mem = new Map<number, {
   c: Cache; seen: Set<string>; lastL1: number; inflight: Promise<HistRow[]> | null;
 }>();
 
-/** Full activity for one launch, newest first, actors resolved to trader
- *  wallets. ER swept every call (gasless node, generous limits); the L1
- *  sweep runs at most every 45s to stay polite to public devnet. */
+function absorb(c: Cache, events: HistEvent[]) {
+  for (const ev of events) {
+    if (!c.events.some((e) => e.sig === ev.sig && e.kind === ev.kind)) c.events.push(ev);
+  }
+}
+
+/** Full activity for one launch, newest first, actors resolved to trader wallets. */
 export async function fetchHistory(id: number): Promise<HistRow[]> {
   let m = mem.get(id);
   if (!m) {
@@ -113,17 +46,30 @@ export async function fetchHistory(id: number): Promise<HistRow[]> {
   }
   if (m.inflight) return m.inflight;
   const me = m;
+  const launch = launchPda(id);
   const p = (async () => {
-    try {
-      const fqdn = await erEndpointFor(launchPda(id));
-      if (fqdn) await sweep(erConnection(fqdn), id, true, me.c, me.seen, 0);
-    } catch { /* undelegated or ER down — L1 still tells the money story */ }
+    // Ask the router first, then the known nodes. A settled market is no
+    // longer routed anywhere, but its node still holds the ledger — without
+    // this fallback the terminal loses every dark trade the moment a market
+    // comes home, and the chart flattens to nothing.
+    for (const fqdn of await erLedgerEndpoints(launch)) {
+      try {
+        const { events } = await sweepLayer(erConnection(fqdn), launch, true, me.c.sk,
+          { max: UI_SIG_CAP, seen: me.seen });
+        absorb(me.c, events);
+        if (events.length) break;
+      } catch { /* node down or pruned — try the next */ }
+    }
     if (Date.now() - me.lastL1 > 45_000) {
       me.lastL1 = Date.now();
-      try { await sweep(connection, id, false, me.c, me.seen, 250); } catch { /* next round */ }
+      try {
+        const { events } = await sweepLayer(connection, launch, false, me.c.sk,
+          { max: UI_SIG_CAP, gapMs: 250, seen: me.seen });
+        absorb(me.c, events);
+      } catch { /* next round */ }
     }
     me.c.events.sort((x, y) => y.at - x.at);
-    me.c.events = me.c.events.slice(0, 60);
+    me.c.events = me.c.events.slice(0, UI_EVENT_CAP);
     me.c.seen = [...me.seen].slice(-200);
     try { localStorage.setItem(CKEY(id), JSON.stringify(me.c)); } catch { /* quota */ }
     return me.c.events.map((e) => ({ ...e, actor: me.c.sk[e.signer] ?? e.signer }));
