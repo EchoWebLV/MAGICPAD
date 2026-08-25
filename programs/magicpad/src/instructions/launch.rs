@@ -6,14 +6,14 @@ use ephemeral_rollups_sdk::cpi::DelegateConfig;
 
 use crate::constants::*;
 use crate::error::MagicPadError;
-use crate::state::{Launch, Platform, LAUNCH_BONDING};
+use crate::state::{Launch, Platform, PlatformConfig, LAUNCH_BONDING};
 
 // ============================================================================
-// A launch costs 1 SOL — that fee IS the anti-spam moat and revenue #1. The
-// SPL mint exists from second zero (PDA mint, authority = platform PDA) but
-// nothing is EVER minted during bonding: the curve trades ledger claims
-// inside the ER. Dark bonding — DexScreener, Photon and the snipe bots see
-// a mint with zero supply and zero holders until graduation day.
+// Launch fee is read from the config PDA (0 = free). The SPL mint exists
+// from second zero (PDA mint, authority = platform PDA) but nothing is
+// EVER minted during bonding: the curve trades ledger claims inside the
+// ER. Dark bonding — DexScreener, Photon and the snipe bots see a mint
+// with zero supply and zero holders until graduation day.
 // ============================================================================
 
 #[derive(Accounts)]
@@ -23,6 +23,9 @@ pub struct CreateLaunch<'info> {
 
     #[account(mut, seeds = [PLATFORM_SEED], bump = platform.bump)]
     pub platform: Box<Account<'info, Platform>>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, PlatformConfig>>,
 
     #[account(init, payer = creator, space = 8 + Launch::INIT_SPACE,
         seeds = [LAUNCH_SEED, platform.launch_seq.to_le_bytes().as_ref()], bump)]
@@ -51,17 +54,19 @@ pub fn create_launch_handler(
         MagicPadError::BadMetadata
     );
 
-    // the 1 SOL gate, creator → platform
-    system_program::transfer(
-        CpiContext::new(
-            ctx.accounts.system_program.key(),
-            Transfer {
-                from: ctx.accounts.creator.to_account_info(),
-                to: ctx.accounts.platform.to_account_info(),
-            },
-        ),
-        LAUNCH_FEE_LAMPORTS,
-    )?;
+    let fee = ctx.accounts.config.launch_fee_lamports;
+    if fee > 0 {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.key(),
+                Transfer {
+                    from: ctx.accounts.creator.to_account_info(),
+                    to: ctx.accounts.platform.to_account_info(),
+                },
+            ),
+            fee,
+        )?;
+    }
 
     let now = Clock::get()?.unix_timestamp;
     let id = ctx.accounts.platform.launch_seq;

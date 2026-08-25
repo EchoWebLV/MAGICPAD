@@ -46,6 +46,7 @@ const program = new Program(idl, provider);
 const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 const le8 = (n) => new BN(n).toArrayLike(Buffer, 'le', 8);
 const PLATFORM = pda(Buffer.from('platform'));
+const CONFIG = pda(Buffer.from('config'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
 const sessionPda = (id, trader) => pda(Buffer.from('tsession'), le8(id), trader.toBuffer());
@@ -165,7 +166,7 @@ await waitForCrest(3 * LAMPORTS_PER_SOL, 'launch fee + escrow');
 const id = (await program.account.platform.fetch(PLATFORM)).launchSeq.toNumber();
 const launch = launchPda(id);
 await sendL1([await program.methods.createLaunch('CEILING', 'CEIL').accountsPartial({
-  creator: wallet.publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+  creator: wallet.publicKey, platform: PLATFORM, config: CONFIG, launch, mint: mintPda(id),
   tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
 }).instruction()], [wallet], `create_launch id=${id} "CEILING"`);
 await sendL1([await program.methods.delegateLaunch(new BN(id)).accountsPartial({
@@ -177,7 +178,7 @@ const sk = Keypair.generate();
 const session = sessionPda(id, wallet.publicKey);
 await sendL1([
   await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(DEP)).accountsPartial({
-    trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId,
+    trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId, gateSigner: wallet.publicKey,
   }).instruction(),
   await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
     payer: wallet.publicKey, session, ...delegationMetas(session, 'Session'),
@@ -206,7 +207,7 @@ const nonce = Date.now();
 const note = topupPda(id, wallet.publicKey, nonce);
 await sendL1([
   await program.methods.topUpSession(new BN(id), new BN(nonce), new BN(TOP)).accountsPartial({
-    trader: wallet.publicKey, session, launch, note, systemProgram: SystemProgram.programId,
+    trader: wallet.publicKey, session, launch, note, systemProgram: SystemProgram.programId, gateSigner: wallet.publicKey,
   }).instruction(),
   await program.methods.delegateTopUp(new BN(id), new BN(nonce)).accountsPartial({
     payer: wallet.publicKey, note, ...delegationMetas(note, 'Note'),

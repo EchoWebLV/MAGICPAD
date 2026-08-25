@@ -4,7 +4,7 @@
  * first (through our API route — the Pinata key stays server-side), then
  * ONE wallet approval does everything, atomically:
  *
- *   create_launch (1 SOL fee) → open_trade_session (escrow the first buy)
+ *   create_launch (fee from config, 0 = free) → open_trade_session (escrow the first buy)
  *   → buy (L1, while the launch is still program-owned for two more
  *   instructions) → delegate_launch → delegate_trade_session → CID memo.
  *
@@ -19,19 +19,17 @@ import { BN } from '@coral-xyz/anchor';
 import { useActiveWallet } from '../../lib/use-active-wallet';
 import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import {
-  DLP, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT,
-  buyQuote, fmtSol, fmtTok, launchPda, mintPda, program, sessionPda,
+  CONFIG, DLP, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, PLATFORM, PROGRAM_ID,
+  TOKEN_PROGRAM, VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT,
+  buyQuote, fetchFees, fmtSol, fmtTok, launchPda, mintPda, program, sessionPda,
 } from '../../lib/magicpad';
 import { metaMemoIx, pinAssets, squashImage } from '../../lib/metadata';
-import { launchSessionKey } from '../../lib/trade-live';
+import { gateEntry, launchSessionKey } from '../../lib/trade-live';
 import { requestAirdrop, sendWithWallet, walletBalance } from '../../lib/wallet-tx';
 
-const FEE = 1_000_000_000;
-// buy-and-deploy is built and devnet-proven (launch 7) but parked for now —
-// flip this to show the first-buy field again; the whole rail sits behind it
-const DEV_BUY_ENABLED = false;
-const DEV_BUY_MAX = 0.5;   // FIRST_WINDOW_MAX_BUY — the anti-snipe cap binds the creator too
-const DEV_BUY_MIN = 0.01;  // MIN_DEPOSIT — the escrow floor
+const DEV_BUY_MIN = MIN_DEPOSIT / LAMPORTS;
+const DEV_BUY_MAX = (GRADUATION_LAMPORTS - 1) / LAMPORTS; // 5◎ freezes; then delegate_launch refuses
+const DEV_BUY_PRESETS = [0.1, 0.5, 1, 2, 3] as const;
 
 const delegationMetas = (target: PublicKey, suffix: string) => {
   const [buf] = PublicKey.findProgramAddressSync([Buffer.from('buffer'), target.toBuffer()], PROGRAM_ID);
@@ -57,21 +55,27 @@ export default function Create() {
   const [website, setWebsite] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [preview, setPreview] = useState('');
-  const [devBuy, setDevBuy] = useState('');
+  const [devBuy, setDevBuy] = useState('1');
   const fileRef = useRef<HTMLInputElement>(null);
   const [bal, setBal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
+  const [fee, setFee] = useState(0);
+  const [taxBps, setTaxBps] = useState(0);
 
   const refreshBal = useCallback(() => {
     if (!publicKey) { setBal(null); return; }
     walletBalance(publicKey).then(setBal).catch(() => { /* next call */ });
   }, [publicKey]);
   useEffect(() => { refreshBal(); }, [refreshBal]);
+  useEffect(() => {
+    fetchFees().then((f) => { setFee(f.launchFeeLamports); setTaxBps(f.launchTaxBps); }).catch(() => {});
+  }, []);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
   const dv = devBuy.trim() === '' ? 0 : Number(devBuy);
+  const overCurve = Number.isFinite(dv) && dv > 0 && dv > DEV_BUY_MAX;
   const devOk = dv === 0 || (Number.isFinite(dv) && dv >= DEV_BUY_MIN && dv <= DEV_BUY_MAX);
   const devLamports = devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
   // the creator is the first buy by construction — this quote IS the fill
@@ -79,7 +83,7 @@ export default function Create() {
     ? buyQuote(VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, BigInt(devLamports)) : 0n;
   const allocPct = Number(alloc) / 1e13; // of 1e15 raw total supply, in %
 
-  const canAfford = bal !== null && bal >= FEE + devLamports + 0.02 * 1e9;
+  const canAfford = bal !== null && bal >= fee + devLamports + 0.02 * 1e9;
   const valid = name.length > 0 && name.length <= 32
     && symbol.length > 0 && symbol.length <= 10 && image !== null && devOk;
 
@@ -107,11 +111,12 @@ export default function Create() {
       const launch = launchPda(id);
       const tx = new Transaction().add(
         await program.methods.createLaunch(name.trim(), symbol.trim().toUpperCase()).accountsPartial({
-          creator: publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+          creator: publicKey, platform: PLATFORM, config: CONFIG, launch, mint: mintPda(id),
           tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
         }).instruction(),
       );
       const signers: Keypair[] = [];
+      let cosign: ((t: Transaction) => Promise<void>) | undefined;
       if (devLamports > 0) {
         // buy-and-deploy: escrow + first buy land BEFORE delegation flips
         // the accounts dark — the ER clones a curve that already moved
@@ -119,9 +124,12 @@ export default function Create() {
         const sk = await launchSessionKey(wallet, id);
         signers.push(sk);
         const session = sessionPda(id, publicKey);
+        const gate = await gateEntry(publicKey);
+        cosign = gate.cosign;
         tx.add(
           await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(devLamports)).accountsPartial({
             trader: publicKey, session, launch, systemProgram: SystemProgram.programId,
+            gateSigner: gate.gateSigner,
           }).instruction(),
           await program.methods.buy(new BN(devLamports)).accountsPartial({
             sessionSigner: sk.publicKey, session, launch,
@@ -145,8 +153,8 @@ export default function Create() {
       // the CID rides the creation tx — resolvable forever from the PDA's history
       tx.add(metaMemoIx(cid));
       setMsg('waiting for your wallet…');
-      await sendWithWallet(wallet, tx, signers);
-      router.push(`/launch/${id}`);
+      await sendWithWallet(wallet, tx, signers, cosign);
+      router.push(`/launch/${mintPda(id).toBase58()}`);
     } catch (e: any) {
       setMsg('');
       setErr(String(e?.message ?? e));
@@ -163,7 +171,7 @@ export default function Create() {
   }
 
   return (
-    <main className="wrap" style={{ maxWidth: 480, paddingTop: 28 }}>
+    <main className="wrap" style={{ maxWidth: 480, margin: '0 auto', paddingTop: 28 }}>
       <div className="panel">
         <h3>Launch a market</h3>
         <div className="imgpick">
@@ -187,12 +195,26 @@ export default function Create() {
           <label>ticker (≤ 10 chars)</label>
           <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="MIDNIGHT" maxLength={10} />
         </div>
-        {DEV_BUY_ENABLED && (
         <div className="field">
-          <label>your first buy (optional, ◎)</label>
+          <label>buy at launch (◎) — any size</label>
+          <div className="presets" style={{ margin: '0 0 8px' }}>
+            <button type="button" className={`preset${dv === 0 ? ' on' : ''}`} onClick={() => setDevBuy('')}>
+              none
+            </button>
+            {DEV_BUY_PRESETS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={`preset${dv === n ? ' on' : ''}`}
+                onClick={() => setDevBuy(String(n))}
+              >
+                {n}◎
+              </button>
+            ))}
+          </div>
           <input
             value={devBuy} onChange={(e) => setDevBuy(e.target.value)}
-            placeholder="0.0" inputMode="decimal"
+            placeholder="0.25, 1, 2.5…" inputMode="decimal"
           />
           {devLamports > 0 && (
             <p className="note" style={{ marginTop: 6 }}>
@@ -201,14 +223,18 @@ export default function Create() {
               {' '}({allocPct.toFixed(2)}% of supply) — held in your session, tradeable instantly
             </p>
           )}
-          {!devOk && (
+          {!devOk && dv !== 0 && !overCurve && (
             <p className="note" style={{ marginTop: 6 }}>
-              between {DEV_BUY_MIN}◎ and {DEV_BUY_MAX}◎ — the first-minute anti-snipe
-              cap is 0.5◎ per wallet and it applies to you too
+              first buy has to be at least {DEV_BUY_MIN}◎ (the escrow floor)
+            </p>
+          )}
+          {overCurve && (
+            <p className="note" style={{ marginTop: 6 }}>
+              under {fmtSol(GRADUATION_LAMPORTS)}◎ — that size fills the curve and freezes
+              the market in the same tx, before it can go dark
             </p>
           )}
         </div>
-        )}
         <div className="field">
           <label>description (optional)</label>
           <textarea
@@ -227,17 +253,21 @@ export default function Create() {
             value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="website" maxLength={120}
           />
         </div>
-        <div className="kv"><span className="k">launch fee</span><span className="mono">1.000◎</span></div>
+        <div className="kv"><span className="k">launch fee</span><span className="mono">{fee === 0 ? 'free' : `${fmtSol(fee)}◎`}</span></div>
+        {taxBps > 0 && (
+          <div className="kv"><span className="k">graduation tax</span><span className="mono">{(taxBps / 100).toFixed(2)}%</span></div>
+        )}
         {devLamports > 0 && (
           <div className="kv"><span className="k">your first buy</span><span className="mono">{fmtSol(devLamports)}◎</span></div>
         )}
         <div className="kv"><span className="k">trading fees</span><span className="mono green">zero</span></div>
-        <div className="kv"><span className="k">loss rakeback</span><span className="mono green">10%</span></div>
         <div className="kv"><span className="k">wallet balance</span>
           <span className="mono">{!publicKey ? 'not connected' : bal === null ? '…' : `${fmtSol(bal)}◎`}</span></div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button className="btn" disabled={busy || !publicKey || !valid || !canAfford} onClick={submit}>
-            {devLamports > 0 ? `Launch + buy · ${fmtSol(FEE + devLamports)}◎` : 'Launch dark · 1◎'}
+            {devLamports > 0
+              ? `Launch + buy · ${fmtSol(fee + devLamports)}◎`
+              : fee === 0 ? 'Launch dark' : `Launch dark · ${fmtSol(fee)}◎`}
           </button>
           {publicKey && !canAfford && (
             <button className="btn ghost" disabled={busy} onClick={airdrop}>Airdrop 1◎</button>
@@ -251,7 +281,7 @@ export default function Create() {
         )}
         {publicKey && !canAfford && bal !== null && (
           <p className="note">
-            you need {fmtSol(FEE + devLamports)}◎ + dust — airdrop devnet SOL or top the wallet up
+            you need {fmtSol(fee + devLamports)}◎ + dust — airdrop devnet SOL or top the wallet up
           </p>
         )}
         {devLamports > 0 ? (

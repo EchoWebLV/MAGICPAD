@@ -14,7 +14,7 @@ pub enum MagicPadError {
     #[msg("not enough tokens held")]
     InsufficientTokens, // 6004
     #[msg("first-window buy cap exceeded")]
-    FirstWindowCap, // 6005
+    FirstWindowCap, // 6005 — retired; kept so later codes do not shift
     #[msg("launch has not reached graduation")]
     NotGraduatable, // 6006
     #[msg("session already reconciled")]
@@ -41,4 +41,14 @@ pub enum MagicPadError {
     PotNotReady, // 6017
     #[msg("top-up already applied")]
     AlreadyApplied, // 6018
+    #[msg("mint supply is not the full graduated supply yet")]
+    MintNotReady, // 6019
+    #[msg("mint authority already revoked")]
+    AlreadyLocked, // 6020
+    #[msg("pool address is empty")]
+    BadPool, // 6021
+    #[msg("tax bps exceeds 10000")]
+    TaxTooHigh, // 6022
+    #[msg("entry is gated — the platform co-signature is missing")]
+    GateRequired, // 6023
 }

@@ -5,8 +5,9 @@
 //
 //   delegated + FROZEN in the ER  → commit sessions (batches of 8) + launch
 //   home + FROZEN/RECONCILED      → reconcile (losers first, winners heal),
-//                                   claim_tokens / claim_rakeback cranks,
-//                                   graduate when the pot crosses 5 SOL
+//                                   claim_tokens cranks,
+//                                   graduate when the pot crosses 5 SOL,
+//                                   then seed Meteora + lock the mint
 //
 // Every payout target is pinned on-chain to session.trader, so the keeper
 // can only ever settle CORRECTLY — it pays fees, never decides amounts.
@@ -23,6 +24,7 @@ import {
   Connection, Keypair, PublicKey, SystemProgram, Transaction, clusterApiUrl,
   LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
+import { migrateLaunch } from './migrate.mjs';
 
 const { AnchorProvider, Program, Wallet, BN, utils } = anchorPkg;
 const bs58 = utils.bytes.bs58;
@@ -42,6 +44,7 @@ const SESSION_DISC = Buffer.from(idl.accounts.find((a) => a.name === 'TradeSessi
 const TOPUP_DISC = Buffer.from(idl.accounts.find((a) => a.name === 'TopUp').discriminator);
 const FROZEN = 1;
 const RECONCILED = 2;
+const GRADUATED = 3;
 
 function loadKeeper() {
   const env = process.env.KEEPER_KEYPAIR;
@@ -60,7 +63,7 @@ const program = new Program(idl, provider);
 const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 const le8 = (n) => new BN(n).toArrayLike(Buffer, 'le', 8);
 const PLATFORM = pda(Buffer.from('platform'));
-const RAKEBACK = pda(Buffer.from('rakeback'));
+const CONFIG = pda(Buffer.from('config'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
 const sessionPda = (id, trader) => pda(Buffer.from('tsession'), le8(id), trader.toBuffer());
@@ -168,7 +171,16 @@ async function tendDelegated(id, launch) {
 
 // home launch: reconcile losers first, heal winners, run the claim cranks,
 // graduate when the pot crosses the line
+async function tendMigrated(id) {
+  try {
+    await migrateLaunch({ conn, program, payer: keeper, id });
+  } catch (e) {
+    log(`launch ${id} migrate: ${String(e.message ?? e).slice(0, 160)}`);
+  }
+}
+
 async function tendHome(id, launch, l, adminKey) {
+  if (l.state === GRADUATED) { await tendMigrated(id); return; }
   if (l.state < FROZEN || l.state > RECONCILED) return;
 
   const raw = await conn.getProgramAccounts(PROGRAM_ID, { filters: sessionFilters(id) });
@@ -209,24 +221,18 @@ async function tendHome(id, launch, l, adminKey) {
         systemProgram: SystemProgram.programId,
       }).instruction()], `claim_tokens → ${s.trader.toBase58().slice(0, 8)}…`);
     }
-    // gate on the PAYOUT, not the loss — a loss under 10 lamports floors to a
-    // zero rakeback and the program rejects it with NothingToClaim forever
-    if (!s.rakebackClaimed && s.realizedLoss.divn(10).gtn(0)) {
-      await sendL1([await program.methods.claimRakeback().accountsPartial({
-        trader: s.trader, session: pubkey, rakebackPool: RAKEBACK,
-      }).instruction()], `claim_rakeback ${sol(s.realizedLoss.divn(10))} → ${s.trader.toBase58().slice(0, 8)}…`);
-    }
   }
 
   const settled = l.state === RECONCILED
     || (l.state === FROZEN && l.sessionsReconciled.eq(l.sessionsOpened));
   if (settled && l.realSolRaised.gte(GRADUATION_LAMPORTS) && keeper.publicKey.equals(adminKey)) {
     await sendL1([await program.methods.graduate().accountsPartial({
-      admin: keeper.publicKey, platform: PLATFORM, launch, mint,
+      admin: keeper.publicKey, platform: PLATFORM, config: CONFIG, launch, mint,
       adminAta: ata(keeper.publicKey, mint),
       tokenProgram: TOKEN_PROGRAM, associatedTokenProgram: ATA_PROGRAM,
       systemProgram: SystemProgram.programId,
     }).instruction()], `GRADUATE launch ${id} — ${sol(l.realSolRaised)} to Meteora seed`);
+    await tendMigrated(id);
   }
 }
 

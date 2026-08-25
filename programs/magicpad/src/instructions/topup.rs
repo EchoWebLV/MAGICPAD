@@ -49,6 +49,15 @@ pub struct TopUpSession<'info> {
     pub note: Box<Account<'info, TopUp>>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: the canonical gate PDA — seeds pin the address; may be empty
+    /// (never armed), which require_gate treats as an open door.
+    #[account(seeds = [GATE_SEED], bump)]
+    pub gate: UncheckedAccount<'info>,
+
+    /// CHECK: verified in require_gate — must be a tx signer matching
+    /// gate.key while armed; any unsigned pubkey while the door is open.
+    pub gate_signer: UncheckedAccount<'info>,
 }
 
 pub fn top_up_session_handler(
@@ -57,6 +66,7 @@ pub fn top_up_session_handler(
     nonce: u64,
     amount: u64,
 ) -> Result<()> {
+    super::session::require_gate(&ctx.accounts.gate, &ctx.accounts.gate_signer)?;
     require!(amount >= MIN_DEPOSIT, MagicPadError::DepositTooSmall);
     {
         let data = ctx.accounts.session.try_borrow_data()?;

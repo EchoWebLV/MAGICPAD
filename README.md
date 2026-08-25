@@ -1,17 +1,17 @@
 # MagicPad
 
-The launchpad that pays you to trade.
+The launchpad snipers cannot see.
 
 Bonding happens inside a MagicBlock Ephemeral Rollup. One approval escrows your
 bankroll, then every buy and sell is a gasless session-key transaction at
 rollup speed. The SPL mint exists from second zero but holds zero supply until
-graduation, so snipers and copy-traders see nothing to shoot at. Lose money
-during bonding and the rakeback pool pays you 10% of it back. That is the
-whole pitch: 1 SOL to launch, zero fees to trade, losses pay rakeback.
+graduation, so snipers and copy-traders see nothing to shoot at. Arm the entry
+gate and bots cannot even open a session. That is the whole pitch: free to
+launch, zero fees to trade, and nothing on L1 to front-run until it is over.
 
 ## The rail
 
-- **create_launch** (L1): 1 SOL fee, PDA mint at supply 0, curve state born
+- **create_launch** (L1): config-set fee (default 0), PDA mint at supply 0, curve state born
 - **delegate_launch** (L1): the market goes dark inside the ER
 - **open_trade_session** (L1): one tx escrows the deposit and delegates the
   session. The escrow is the ceiling on what the ER can ever spend.
@@ -27,8 +27,11 @@ whole pitch: 1 SOL to launch, zero fees to trade, losses pay rakeback.
 - **reconcile_trade_session** (L1): cash follows ledger. Losers fund the pot
   first, winners collect after. Conservation holds to the lamport.
 - **claim_tokens** (L1): the first real mint this token ever sees
-- **claim_rakeback** (L1): 10% of realized losses, paid from a segregated pool
-- **graduate** (L1): raised SOL and unsold supply leave to seed Meteora
+- **graduate** (L1): raised SOL and leftover supply leave for the Meteora seed
+- **migrate** (script): DAMM v2 pool at the frozen curve price, excess burned, LP locked
+- **lock_mint** (L1): mint authority revoked once supply is the full graduated amount
+- **set_fees / set_gate** (L1, admin): launch fee + graduation tax on a config
+  PDA; the gate pins entry to a co-signer, so only the UI can open a session
 
 ## Devnet
 
@@ -43,8 +46,7 @@ node scripts/demo-trader.mjs auto
 Two traders, one launch. trader2 pumps and dumps for a profit, the wallet
 buys the top and sells the crater for a real loss. The run proves the
 winner-first reconcile fails clean (PotNotReady), the conservation table
-balances exactly, rakeback pays real lamports, and claim_tokens mints real
-SPL. A killed run picks back up with `resume <id>`.
+balances exactly, and claim_tokens mints real SPL. A killed run picks back up with `resume <id>`.
 
 ```bash
 node scripts/prove-topup.mjs
@@ -58,10 +60,13 @@ table still balances to the lamport.
 
 The keeper is the janitor that makes settlement autonomous. It never touches
 a live market; once a launch freezes it commits sessions home, reconciles
-losers-first, cranks token claims and rakeback, and graduates what qualifies:
+losers-first, cranks token claims, graduates what qualifies, then
+seeds Meteora and locks the mint:
 
 ```bash
 node scripts/keeper.mjs            # loop; KEEPER_ONCE=1 for a single tick
+node scripts/migrate.mjs           # seed any GRADUATED launch still sitting on admin
+node scripts/migrate.mjs --dry     # print seed amounts, send nothing
 ```
 
 ## Web terminal
@@ -112,10 +117,11 @@ cargo test --manifest-path litesvm-tests/Cargo.toml       # full lifecycle
 ```
 
 The litesvm suite drives the entire rail in-process: fee and mint checks,
-two-trader lifecycle with graduation, loss and rakeback accounting, the
-first-window anti-whale cap, escrow discipline against hijacks, the
-no-trades-after-freeze gate, and the top-up lifecycle — ceiling bounce,
-raise, absorb, and the reconcile-before-absorb refusal.
+two-trader lifecycle with graduation, loss accounting, the escrow discipline
+against hijacks, the no-trades-after-freeze gate, the entry gate (armed,
+disarmed, forged, wrong co-signer), session key rotation, and the top-up
+lifecycle — ceiling bounce, raise, absorb, and the reconcile-before-absorb
+refusal.
 
 ## Build
 

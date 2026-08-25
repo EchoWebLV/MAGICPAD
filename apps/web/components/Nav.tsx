@@ -2,18 +2,27 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { BaseWalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import Glyph from './Glyph';
 import { connection, fmtSol, short } from '../lib/magicpad';
 import { requestAirdrop } from '../lib/wallet-tx';
 import { privyEnabled, useActiveWallet } from '../lib/use-active-wallet';
+
+const WALLET_LABELS = {
+  'change-wallet': 'Change wallet',
+  connecting: 'Connecting…',
+  'copy-address': 'Copy address',
+  copied: 'Copied',
+  disconnect: 'Disconnect',
+  'has-wallet': 'Connect',
+  'no-wallet': 'Connect',
+} as const;
 
 export default function Nav() {
   const w = useActiveWallet();
   const { publicKey } = w;
   const [bal, setBal] = useState<number | null>(null);
   const [dropping, setDropping] = useState(false);
-  // wallet state only exists client-side — mount-gate it or hydration screams
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
@@ -26,7 +35,6 @@ export default function Nav() {
     };
     tick();
     const t = setInterval(tick, 12000);
-    // every confirmed action pings this — the number moves the moment money does
     window.addEventListener('magicpad:activity', tick);
     return () => { live = false; clearInterval(t); window.removeEventListener('magicpad:activity', tick); };
   }, [publicKey]);
@@ -40,30 +48,48 @@ export default function Nav() {
   };
 
   return (
-    <nav className="nav">
-      <Link href="/" className="brand"><i className="seal" />MagicPad</Link>
-      <span className="tag">the launchpad that pays you to trade</span>
-      <div className="grow" />
-      {publicKey && bal !== null && (
-        <span className="pill mono"><i className="dot" />{fmtSol(bal, 3)}◎</span>
-      )}
-      {/* fresh embedded wallets start empty — hand them devnet SOL in place */}
-      {mounted && w.source === 'privy' && bal !== null && bal < 20_000_000 && (
-        <button className="pill mono" onClick={drop} disabled={dropping}>
-          {dropping ? 'dropping…' : '+1◎ devnet'}
-        </button>
-      )}
-      {mounted && privyEnabled && !w.privyAuthed && w.login && (
-        <button className="btn" onClick={w.login} disabled={!w.privyReady}>Log in</button>
-      )}
-      {/* the identity lives in the wallet room now — the nav just points at it */}
-      {mounted && w.source === 'privy' && (
-        <Link href="/wallet" className="pill icon" aria-label="your wallet" title={short(publicKey?.toBase58() ?? '')}>
-          <Glyph n="wallet" size={15} />
+    <div className="navwrap">
+      <nav className="nav">
+        <Link href="/" className="brand">
+          <Glyph n="spark" size={18} />
+          mooner
         </Link>
-      )}
-      {mounted && w.source !== 'privy' && <WalletMultiButton />}
-      <Link href="/create" className="btn">+ Launch</Link>
-    </nav>
+        <div className="nav-links">
+          <Link href="/">Mooner</Link>
+          <a href="/#how">How it works</a>
+          <Link href="/explore">Explore</Link>
+          <a href="/#how">About</a>
+        </div>
+        <div className="grow" />
+        {publicKey && bal !== null && (
+          <span className="pill mono"><i className="dot" />{fmtSol(bal, 3)}◎</span>
+        )}
+        {mounted && w.source === 'privy' && bal !== null && bal < 20_000_000 && (
+          <button className="pill mono" onClick={drop} disabled={dropping}>
+            {dropping ? 'dropping…' : '+1◎ devnet'}
+          </button>
+        )}
+        {mounted && w.source === 'privy' && (
+          <Link href="/wallet" className="pill icon" aria-label="your wallet" title={short(publicKey?.toBase58() ?? '')}>
+            <Glyph n="wallet" size={15} />
+          </Link>
+        )}
+        {mounted && w.source !== 'privy' && publicKey && (
+          <BaseWalletMultiButton labels={WALLET_LABELS} />
+        )}
+        {mounted && !publicKey && (
+          <button
+            className="btn nav-cta"
+            onClick={w.connect}
+            disabled={privyEnabled && !w.privyReady}
+          >
+            Connect <Glyph n="arrow" size={15} />
+          </button>
+        )}
+        {publicKey && (
+          <Link href="/create" className="btn">Start launch</Link>
+        )}
+      </nav>
+    </div>
   );
 }

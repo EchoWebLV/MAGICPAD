@@ -23,7 +23,6 @@ export const LAMPORTS = 1_000_000_000;
 export const GRADUATION_LAMPORTS = 5 * LAMPORTS;
 export const TOKEN_DECIMALS = 6;
 export const TOKEN_TOTAL_SUPPLY = 1_000_000_000_000_000; // raw units
-export const FIRST_WINDOW_MAX_BUY = 0.5 * LAMPORTS;
 export const MIN_DEPOSIT = 0.01 * LAMPORTS;
 // launch-time virtual reserves, from programs/magicpad/src/constants.rs —
 // a launch-tx dev buy quotes against EXACTLY these, so its fill is exact
@@ -37,7 +36,10 @@ export const connection = new Connection(RPC_URL, {
 const pda = (...seeds: (Buffer | Uint8Array)[]) =>
   PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 export const PLATFORM = pda(Buffer.from('platform'));
-export const RAKEBACK = pda(Buffer.from('rakeback'));
+export const CONFIG = pda(Buffer.from('config'));
+export const GATE = pda(Buffer.from('gate'));
+export const ENV_LAUNCH_FEE_LAMPORTS = Number(process.env.NEXT_PUBLIC_LAUNCH_FEE_LAMPORTS || '0');
+export const ENV_LAUNCH_TAX_BPS = Number(process.env.NEXT_PUBLIC_LAUNCH_TAX_BPS || '0');
 export const launchPda = (id: number) =>
   pda(Buffer.from('launch'), new BN(id).toArrayLike(Buffer, 'le', 8));
 export const mintPda = (id: number) =>
@@ -47,6 +49,8 @@ export const sessionPda = (id: number, trader: PublicKey) =>
 export const topupPda = (id: number, trader: PublicKey, nonce: number) =>
   pda(Buffer.from('topup'), new BN(id).toArrayLike(Buffer, 'le', 8), trader.toBuffer(),
     new BN(nonce).toArrayLike(Buffer, 'le', 8));
+export const poolRecordPda = (mint: PublicKey) =>
+  pda(Buffer.from('pool'), mint.toBuffer());
 
 // read-only program — tx building + decode only, never signs
 const deadWallet = {
@@ -58,6 +62,60 @@ export const program = new Program(
   idl as any,
   new AnchorProvider(connection, deadWallet as any, { commitment: 'confirmed' }),
 );
+
+export async function fetchFees(): Promise<{ launchFeeLamports: number; launchTaxBps: number }> {
+  try {
+    const c = await (program.account as any).platformConfig.fetch(CONFIG);
+    return {
+      launchFeeLamports: Number((c.launchFeeLamports as BN).toString()),
+      launchTaxBps: Number(c.launchTaxBps),
+    };
+  } catch {
+    return { launchFeeLamports: ENV_LAUNCH_FEE_LAMPORTS, launchTaxBps: ENV_LAUNCH_TAX_BPS };
+  }
+}
+
+/** Canonical market URL is the mint CA. Numeric /launch/7 still resolves
+ *  so old links redirect once the page has the mint. */
+export const launchHref = (mint: string) => `/launch/${mint}`;
+
+export async function launchIdFromPath(param: string): Promise<number | null> {
+  if (/^\d+$/.test(param)) {
+    const id = Number(param);
+    return Number.isInteger(id) ? id : null;
+  }
+  let mint: PublicKey;
+  try { mint = new PublicKey(param); } catch { return null; }
+  try {
+    const platform = await (program.account as any).platform.fetch(PLATFORM);
+    const seq = (platform.launchSeq as BN).toNumber();
+    for (let i = 0; i < seq; i++) {
+      if (mintPda(i).equals(mint)) return i;
+    }
+  } catch { /* platform unread — treat as missing */ }
+  return null;
+}
+
+export const decodeGate = (d: Buffer) => program.coder.accounts.decode('gate', d);
+
+/** The armed entry co-signer, or null while entry is permissionless.
+ *  Cached a minute — arming the gate is an admin act, not a per-click one. */
+let gateCache: { key: PublicKey | null; at: number } | null = null;
+export async function fetchGateKey(): Promise<PublicKey | null> {
+  if (gateCache && Date.now() - gateCache.at < 60_000) return gateCache.key;
+  let key: PublicKey | null = null;
+  try {
+    const acc = await connection.getAccountInfo(GATE);
+    if (acc && acc.data.length > 8) {
+      const g = decodeGate(acc.data);
+      if (!(g.key as PublicKey).equals(PublicKey.default)) key = g.key;
+    }
+  } catch { /* RPC hiccup — treat as unknown, retry next call */
+    return gateCache?.key ?? null;
+  }
+  gateCache = { key, at: Date.now() };
+  return key;
+}
 
 export const decodeLaunch = (d: Buffer) => program.coder.accounts.decode('launch', d);
 export const decodeSession = (d: Buffer) => program.coder.accounts.decode('tradeSession', d);

@@ -18,9 +18,9 @@ import {
   Connection, Keypair, PublicKey, SystemProgram, Transaction,
 } from '@solana/web3.js';
 import {
-  DLP, MIN_DEPOSIT, PROGRAM_ID, TOPUP_DISCRIMINATOR, TOPUP_SPACE, connection,
-  decodeLaunch, decodeSession, decodeTopUp, erConnection, erEndpointFor,
-  launchPda, program, sessionPda, topupPda,
+  DLP, MIN_DEPOSIT, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, TOPUP_DISCRIMINATOR, TOPUP_SPACE,
+  connection, decodeLaunch, decodeSession, decodeTopUp, erConnection, erEndpointFor,
+  fetchGateKey, launchPda, mintPda, program, sessionPda, topupPda,
 } from './magicpad';
 import { WalletLike, notifyActivity, sendWithWallet } from './wallet-tx';
 
@@ -30,7 +30,6 @@ const PROGRAM_ERROR_TEXT: Record<number, string> = {
   6002: 'deposit is below the minimum',
   6003: 'that order is bigger than your free escrow — retry and it will top up first',
   6004: 'you are selling more tokens than you hold',
-  6005: 'anti-snipe window: buy cap hit — smaller size for now',
   6010: 'trade key out of sync with this market — retry and it will re-sync',
   6011: 'the curve rejected that size — try a different amount',
   6013: 'ledger guard tripped — refresh and retry',
@@ -199,6 +198,50 @@ async function withL1Retry<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Entry-gate plumbing. Armed gate → the open/top-up tx must carry the
+ *  gate key's co-signature, fetched from our backend — which signs only
+ *  for sessions born in this app. That is the whole "no side wallets, no
+ *  custom bots" guarantee, and the program enforces it (GateRequired).
+ *  Disarmed → any unsigned placeholder satisfies the account. */
+export async function gateEntry(trader: PublicKey): Promise<{
+  gateSigner: PublicKey;
+  cosign?: (tx: Transaction) => Promise<void>;
+}> {
+  const key = await fetchGateKey();
+  if (!key) return { gateSigner: trader };
+  return {
+    gateSigner: key,
+    cosign: async (tx) => {
+      // the IDL types gate_signer as unchecked, so anchor built the meta
+      // unsigned — promote it before the message compiles, or the
+      // program's is_signer check can never pass
+      for (const ix of tx.instructions) {
+        for (const k of ix.keys) if (k.pubkey.equals(key)) k.isSigner = true;
+      }
+      let auth: string | null = null;
+      try {
+        // standalone Privy accessor — resolves null on the adapter rail
+        const { getAccessToken } = await import('@privy-io/react-auth');
+        auth = await getAccessToken();
+      } catch { /* Privy not mounted — the backend decides the policy */ }
+      const res = await fetch('/api/session/sign', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(auth ? { authorization: `Bearer ${auth}` } : {}),
+        },
+        body: JSON.stringify({ message: tx.serializeMessage().toString('base64') }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`entry is gated — the app could not co-sign${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+      }
+      const { signature } = await res.json();
+      tx.addSignature(key, Buffer.from(signature, 'base64'));
+    },
+  };
+}
+
 /** The ONE wallet approval: escrow `deposit` lamports + delegate, in a
  *  single tx. No-op if the session already exists. */
 export async function ensureTradeSession(wallet: WalletLike, id: number, deposit: number): Promise<PublicKey> {
@@ -209,15 +252,17 @@ export async function ensureTradeSession(wallet: WalletLike, id: number, deposit
 
   const sk = await sessionSigner(wallet, id);
   const launch = launchPda(id);
+  const gate = await gateEntry(trader);
   const tx = new Transaction().add(
     await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(deposit)).accountsPartial({
       trader, session, launch, systemProgram: SystemProgram.programId,
+      gateSigner: gate.gateSigner,
     }).instruction(),
     await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
       payer: trader, session, ...delegationMetas(session, 'Session'),
     }).instruction(),
   );
-  await withL1Retry(() => sendWithWallet(wallet, tx));
+  await withL1Retry(() => sendWithWallet(wallet, tx, [], gate.cosign));
   return session;
 }
 
@@ -349,15 +394,17 @@ export async function topUpSession(wallet: WalletLike, id: number, lamports: num
   const note = topupPda(id, trader, nonce);
   const session = sessionPda(id, trader);
   const launch = launchPda(id);
+  const gate = await gateEntry(trader);
   const tx = new Transaction().add(
     await program.methods.topUpSession(new BN(id), new BN(nonce), new BN(amount)).accountsPartial({
       trader, session, launch, note, systemProgram: SystemProgram.programId,
+      gateSigner: gate.gateSigner,
     }).instruction(),
     await program.methods.delegateTopUp(new BN(id), new BN(nonce)).accountsPartial({
       payer: trader, note, ...delegationMetas(note, 'Note'),
     }).instruction(),
   );
-  await withL1Retry(() => sendWithWallet(wallet, tx));
+  await withL1Retry(() => sendWithWallet(wallet, tx, [], gate.cosign));
 
   if (!(await applyNote(wallet, id, nonce, amount, 15))) {
     // a note is now parked — make sure the next attempt actually sweeps
@@ -435,6 +482,8 @@ export async function sellLive(wallet: WalletLike, id: number, tokensRaw: string
   }).instruction());
 }
 
+export type QuickBuyPhase = 'session' | 'top-up' | 'buy';
+
 /** One click, any market: open the escrow if this is the trader's first
  *  touch, raise it if the size outruns what's already in there, then buy
  *  gaslessly. The escrow legs are skipped whenever they aren't needed, so
@@ -442,17 +491,25 @@ export async function sellLive(wallet: WalletLike, id: number, tokensRaw: string
  *
  *  A position that can't be read (ER hiccup) falls through to
  *  ensureTradeSession, which is itself a no-op when the session exists. */
-export async function quickBuy(wallet: WalletLike, id: number, lamports: number): Promise<string> {
+export async function quickBuy(
+  wallet: WalletLike, id: number, lamports: number,
+  onPhase?: (phase: QuickBuyPhase) => void,
+): Promise<string> {
   const trader = wallet.publicKey;
   if (!trader) throw new Error('connect a wallet first');
   let pos: PositionView | null = null;
   try { pos = await readPosition(trader, id); } catch { /* unknown — ensure covers it */ }
   if (!pos) {
+    onPhase?.('session');
     await ensureTradeSession(wallet, id, Math.max(lamports, MIN_DEPOSIT));
   } else {
     const avail = pos.deposit + pos.solProceeds - pos.solSpent;
-    if (lamports > avail) await topUpSession(wallet, id, Math.max(lamports - avail, MIN_DEPOSIT));
+    if (lamports > avail) {
+      onPhase?.('top-up');
+      await topUpSession(wallet, id, Math.max(lamports - avail, MIN_DEPOSIT));
+    }
   }
+  onPhase?.('buy');
   return buyLive(wallet, id, lamports);
 }
 
@@ -464,6 +521,7 @@ export interface PositionView {
   costBasis: number;
   realizedLoss: number;
   reconciled: boolean;
+  tokensClaimed: boolean;
 }
 
 /** The trader's live ledger for this launch — ER first (live market),
@@ -498,7 +556,32 @@ export async function readPosition(trader: PublicKey, id: number): Promise<Posit
     costBasis: (s.costBasis as BN).toNumber(),
     realizedLoss: (s.realizedLoss as BN).toNumber(),
     reconciled: s.reconciled as boolean,
+    tokensClaimed: s.tokensClaimed as boolean,
   };
+}
+
+const ATA_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const ata = (owner: PublicKey, mint: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()], ATA_PROGRAM,
+  )[0];
+
+/** Permissionless crank: mint the ledger claim into the trader's ATA. */
+export async function claimTokens(wallet: WalletLike, id: number, trader: PublicKey): Promise<string> {
+  const mint = mintPda(id);
+  const ix = await program.methods.claimTokens().accountsPartial({
+    cranker: wallet.publicKey!,
+    trader,
+    platform: PLATFORM,
+    launch: launchPda(id),
+    session: sessionPda(id, trader),
+    mint,
+    traderAta: ata(trader, mint),
+    tokenProgram: TOKEN_PROGRAM,
+    associatedTokenProgram: ATA_PROGRAM,
+    systemProgram: SystemProgram.programId,
+  }).instruction();
+  return sendWithWallet(wallet, new Transaction().add(ix));
 }
 
 /** Live curve state for one launch — ER when dark, L1 when home. */

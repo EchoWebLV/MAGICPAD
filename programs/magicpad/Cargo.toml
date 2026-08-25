@@ -1,7 +1,7 @@
 [package]
 name = "magicpad"
 version = "0.1.0"
-description = "MagicPad — dark-bonding launchpad: gasless curve trading in a MagicBlock ER, rakeback on losses, graduates to Meteora"
+description = "MagicPad — dark-bonding launchpad: gasless curve trading in a MagicBlock ER, nothing on L1 to snipe, graduates to Meteora"
 edition = "2021"
 
 [lib]

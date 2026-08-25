@@ -51,6 +51,7 @@ const program = new Program(idl, new AnchorProvider(conn, new Wallet(wallet), { 
 const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 const le8 = (n) => new BN(n).toArrayLike(Buffer, 'le', 8);
 const PLATFORM = pda(Buffer.from('platform'));
+const CONFIG = pda(Buffer.from('config'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
 const sessionPda = (id, trader) => pda(Buffer.from('tsession'), le8(id), trader.toBuffer());
@@ -132,11 +133,11 @@ const sk = Keypair.generate(); // web derives this from the wallet signature
 
 const tx = new Transaction().add(
   await program.methods.createLaunch('FIRST BUY', 'FIRST').accountsPartial({
-    creator: wallet.publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+    creator: wallet.publicKey, platform: PLATFORM, config: CONFIG, launch, mint: mintPda(id),
     tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
   }).instruction(),
   await program.methods.openTradeSession(new BN(id), sk.publicKey, new BN(deposit.toString())).accountsPartial({
-    trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId,
+    trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId, gateSigner: wallet.publicKey,
   }).instruction(),
   await program.methods.buy(new BN(devBuy.toString())).accountsPartial({
     sessionSigner: sk.publicKey, session, launch,

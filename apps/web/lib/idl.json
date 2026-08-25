@@ -4,7 +4,7 @@
     "name": "magicpad",
     "version": "0.1.0",
     "spec": "0.1.0",
-    "description": "MagicPad — dark-bonding launchpad: gasless curve trading in a MagicBlock ER, rakeback on losses, graduates to Meteora"
+    "description": "MagicPad — dark-bonding launchpad: gasless curve trading in a MagicBlock ER, nothing on L1 to snipe, graduates to Meteora"
   },
   "instructions": [
     {
@@ -287,78 +287,6 @@
           "type": "u64"
         }
       ]
-    },
-    {
-      "name": "claim_rakeback",
-      "discriminator": [
-        221,
-        66,
-        215,
-        177,
-        200,
-        203,
-        156,
-        40
-      ],
-      "accounts": [
-        {
-          "name": "trader",
-          "writable": true
-        },
-        {
-          "name": "session",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  115,
-                  101,
-                  115,
-                  115,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "session.launch_id",
-                "account": "TradeSession"
-              },
-              {
-                "kind": "account",
-                "path": "session.trader",
-                "account": "TradeSession"
-              }
-            ]
-          }
-        },
-        {
-          "name": "rakeback_pool",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  97,
-                  107,
-                  101,
-                  98,
-                  97,
-                  99,
-                  107
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": []
     },
     {
       "name": "claim_tokens",
@@ -723,6 +651,24 @@
                   111,
                   114,
                   109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
                 ]
               }
             ]
@@ -1481,57 +1427,6 @@
       "args": []
     },
     {
-      "name": "fund_rakeback",
-      "discriminator": [
-        201,
-        183,
-        189,
-        23,
-        204,
-        55,
-        140,
-        165
-      ],
-      "accounts": [
-        {
-          "name": "funder",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "rakeback_pool",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  97,
-                  107,
-                  101,
-                  98,
-                  97,
-                  99,
-                  107
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
       "name": "graduate",
       "discriminator": [
         45,
@@ -1551,6 +1446,7 @@
         },
         {
           "name": "platform",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1564,6 +1460,24 @@
                   111,
                   114,
                   109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
                 ]
               }
             ]
@@ -1760,21 +1674,19 @@
           }
         },
         {
-          "name": "rakeback_pool",
+          "name": "config",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  114,
-                  97,
-                  107,
-                  101,
-                  98,
-                  97,
                   99,
-                  107
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
                 ]
               }
             ]
@@ -1783,6 +1695,91 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "lock_mint",
+      "discriminator": [
+        134,
+        175,
+        243,
+        208,
+        99,
+        138,
+        46,
+        61
+      ],
+      "accounts": [
+        {
+          "name": "platform",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
@@ -1864,6 +1861,31 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "gate",
+          "docs": [
+            "(never armed), which require_gate treats as an open door."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "gate_signer",
+          "docs": [
+            "gate.key while armed; any unsigned pubkey while the door is open."
+          ]
         }
       ],
       "args": [
@@ -1992,6 +2014,121 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "record_pool",
+      "discriminator": [
+        151,
+        92,
+        116,
+        141,
+        196,
+        61,
+        201,
+        230
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "platform",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "migrated_pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "pool",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "rotate_session_key",
@@ -2136,6 +2273,150 @@
       ]
     },
     {
+      "name": "set_fees",
+      "discriminator": [
+        137,
+        178,
+        49,
+        58,
+        0,
+        245,
+        242,
+        190
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "platform",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "launch_fee_lamports",
+          "type": "u64"
+        },
+        {
+          "name": "launch_tax_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "set_gate",
+      "docs": [
+        "Arm (or disarm, with Pubkey::default()) the entry gate: while armed,",
+        "opening or topping up a trade session requires this key's co-signature."
+      ],
+      "discriminator": [
+        160,
+        18,
+        221,
+        241,
+        119,
+        196,
+        121,
+        6
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "platform",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "gate",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_key",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "top_up_session",
       "discriminator": [
         38,
@@ -2245,6 +2526,31 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "gate",
+          "docs": [
+            "(never armed), which require_gate treats as an open door."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "gate_signer",
+          "docs": [
+            "gate.key while armed; any unsigned pubkey while the door is open."
+          ]
         }
       ],
       "args": [
@@ -2261,9 +2567,69 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "withdraw_platform",
+      "discriminator": [
+        87,
+        237,
+        31,
+        212,
+        241,
+        172,
+        99,
+        33
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "platform",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
+    {
+      "name": "Gate",
+      "discriminator": [
+        13,
+        25,
+        212,
+        153,
+        150,
+        57,
+        225,
+        171
+      ]
+    },
     {
       "name": "Launch",
       "discriminator": [
@@ -2275,6 +2641,19 @@
         85,
         213,
         38
+      ]
+    },
+    {
+      "name": "MigratedPool",
+      "discriminator": [
+        235,
+        209,
+        206,
+        168,
+        15,
+        31,
+        204,
+        98
       ]
     },
     {
@@ -2291,16 +2670,16 @@
       ]
     },
     {
-      "name": "RakebackPool",
+      "name": "PlatformConfig",
       "discriminator": [
-        32,
-        172,
-        229,
-        117,
-        24,
-        214,
-        232,
-        135
+        160,
+        78,
+        128,
+        0,
+        248,
+        83,
+        230,
+        160
       ]
     },
     {
@@ -2425,9 +2804,50 @@
       "code": 6018,
       "name": "AlreadyApplied",
       "msg": "top-up already applied"
+    },
+    {
+      "code": 6019,
+      "name": "MintNotReady",
+      "msg": "mint supply is not the full graduated supply yet"
+    },
+    {
+      "code": 6020,
+      "name": "AlreadyLocked",
+      "msg": "mint authority already revoked"
+    },
+    {
+      "code": 6021,
+      "name": "BadPool",
+      "msg": "pool address is empty"
+    },
+    {
+      "code": 6022,
+      "name": "TaxTooHigh",
+      "msg": "tax bps exceeds 10000"
+    },
+    {
+      "code": 6023,
+      "name": "GateRequired",
+      "msg": "entry is gated — the platform co-signature is missing"
     }
   ],
   "types": [
+    {
+      "name": "Gate",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "key",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
     {
       "name": "Launch",
       "type": {
@@ -2497,6 +2917,30 @@
       }
     },
     {
+      "name": "MigratedPool",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "launch_id",
+            "type": "u64"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "Platform",
       "type": {
         "kind": "struct",
@@ -2517,10 +2961,23 @@
       }
     },
     {
-      "name": "RakebackPool",
+      "name": "PlatformConfig",
       "type": {
         "kind": "struct",
-        "fields": []
+        "fields": [
+          {
+            "name": "launch_fee_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "launch_tax_bps",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
       }
     },
     {

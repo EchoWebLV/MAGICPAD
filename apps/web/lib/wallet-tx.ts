@@ -25,6 +25,7 @@ export function notifyActivity(): void {
 
 export async function sendWithWallet(
   wallet: WalletLike, tx: Transaction, extraSigners: Keypair[] = [],
+  cosign?: (tx: Transaction) => Promise<void>,
 ): Promise<string> {
   if (!wallet.publicKey) throw new Error('connect a wallet first');
   // pin the blockhash ourselves so the confirm window is the one the tx
@@ -36,6 +37,9 @@ export async function sendWithWallet(
   // both wallet rails preserve them — Privy serializes and signs on top,
   // adapters partial-sign the same tx object
   if (extraSigners.length) tx.partialSign(...extraSigners);
+  // remote co-signatures (the entry gate) ride the same rule: message
+  // pinned first, then the signature lands via tx.addSignature
+  if (cosign) await cosign(tx);
   const sig = await wallet.sendTransaction(tx, connection, { maxRetries: 3 });
   try {
     const res = await connection.confirmTransaction({ signature: sig, ...bh }, 'confirmed');
@@ -60,6 +64,17 @@ export async function sendWithWallet(
 
 export async function walletBalance(owner: PublicKey): Promise<number> {
   return connection.getBalance(owner);
+}
+
+const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ATA_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
+export async function splBalance(owner: PublicKey, mint: PublicKey): Promise<bigint> {
+  const ata = PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()], ATA_PROGRAM,
+  )[0];
+  const acc = await connection.getTokenAccountBalance(ata).catch(() => null);
+  return acc ? BigInt(acc.value.amount) : 0n;
 }
 
 export async function requestAirdrop(owner: PublicKey, lamports = 1_000_000_000): Promise<string> {

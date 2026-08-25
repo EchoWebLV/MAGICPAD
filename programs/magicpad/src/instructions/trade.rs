@@ -47,16 +47,6 @@ pub fn buy_handler(ctx: Context<TradeEr>, amount_in: u64) -> Result<()> {
         .saturating_sub(s.sol_proceeds);
     require!(exposure <= s.deposit, MagicPadError::ExceedsDeposit);
 
-    // anti-snipe layer two: per-session gross-buy cap in the first window
-    let now = Clock::get()?.unix_timestamp; // the ER mirrors the L1 clock
-    if now < l.first_window_end_ts {
-        let gross = s
-            .sol_spent
-            .checked_add(amount_in)
-            .ok_or(MagicPadError::Overflow)?;
-        require!(gross <= FIRST_WINDOW_MAX_BUY, MagicPadError::FirstWindowCap);
-    }
-
     let out = curve::buy_quote(l.virtual_sol, l.virtual_tok, amount_in)
         .ok_or(MagicPadError::BadQuote)?;
     require!(out > 0, MagicPadError::BadQuote); // dust in, nothing out — reject
@@ -132,8 +122,8 @@ pub fn sell_handler(ctx: Context<TradeEr>, tokens_in: u64) -> Result<()> {
     )
     .map_err(|_| MagicPadError::Overflow)?;
 
-    // the rakeback ledger: realized losses only — unfarmable by wash flow,
-    // a round trip at flat price loses only the rounding dust
+    // avg-cost realized loss — kept on the session for layout; rakeback
+    // no longer pays out of it. A round trip at flat price is rounding dust.
     if out < basis_slice {
         s.realized_loss = s
             .realized_loss

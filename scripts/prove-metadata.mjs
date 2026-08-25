@@ -41,6 +41,7 @@ const program = new Program(idl, new AnchorProvider(conn, new Wallet(wallet), { 
 const pda = (...seeds) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 const le8 = (n) => new BN(n).toArrayLike(Buffer, 'le', 8);
 const PLATFORM = pda(Buffer.from('platform'));
+const CONFIG = pda(Buffer.from('config'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -92,7 +93,7 @@ const [dmeta] = PublicKey.findProgramAddressSync([Buffer.from('delegation-metada
 
 await send([
   await program.methods.createLaunch('NINE ORBS', 'ORBS').accountsPartial({
-    creator: wallet.publicKey, platform: PLATFORM, launch, mint: mintPda(id),
+    creator: wallet.publicKey, platform: PLATFORM, config: CONFIG, launch, mint: mintPda(id),
     tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
   }).instruction(),
   await program.methods.delegateLaunch(new BN(id)).accountsPartial({
