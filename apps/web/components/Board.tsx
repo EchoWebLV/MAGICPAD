@@ -194,7 +194,7 @@ export default function Board() {
             </button>
           ))}
         </div>
-        <span className="faint bbnote">one click from any row — gasless, zero fee</span>
+        <span className="faint bbnote">one click from any row. gasless, zero fee</span>
       </div>
       <div className="board">
         <Col idx="01" title="New" hint={launches ? 'nothing bonding right now' : 'loading'}

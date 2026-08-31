@@ -51,7 +51,7 @@ function loadPrefs(): Prefs {
 }
 
 function fmtAxis(v: number, quote: Quote, axis: Axis): string {
-  if (!Number.isFinite(v)) return '—';
+  if (!Number.isFinite(v)) return '·';
   if (axis === 'price') {
     const digits = v >= 1 ? 4 : v >= 0.0001 ? 6 : 10;
     const body = v.toFixed(digits);

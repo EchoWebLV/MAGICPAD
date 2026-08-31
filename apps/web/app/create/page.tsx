@@ -186,7 +186,7 @@ export default function Create() {
             {preview ? <img src={preview} alt="token" /> : '+'}
           </div>
           <div>
-            <div className="hint">token image — square looks best,
+            <div className="hint">token image. square looks best,
               <br />resized to 512px before upload</div>
             <input
               ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
@@ -203,7 +203,7 @@ export default function Create() {
           <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="MIDNIGHT" maxLength={10} />
         </div>
         <div className="field">
-          <label>buy at launch (◎) — any size</label>
+          <label>buy at launch (◎), any size</label>
           <div className="presets" style={{ margin: '0 0 8px' }}>
             <button type="button" disabled={fairest} className={`preset${dv === 0 ? ' on' : ''}`} onClick={() => setDevBuy('')}>
               none
@@ -228,7 +228,7 @@ export default function Create() {
             <p className="note" style={{ marginTop: 6 }}>
               you are the first buy, so this fill is exact:{' '}
               <span className="mono green">{fmtTok(alloc)} {symbol.trim().toUpperCase() || 'tokens'}</span>
-              {' '}({allocPct.toFixed(2)}% of supply) — held in your session, tradeable instantly
+              {' '}({allocPct.toFixed(2)}% of supply), held in your session and tradeable instantly
             </p>
           )}
           {!devOk && dv !== 0 && !overCurve && (
@@ -238,8 +238,8 @@ export default function Create() {
           )}
           {overCurve && (
             <p className="note" style={{ marginTop: 6 }}>
-              under {fmtSol(GRADUATION_LAMPORTS)}◎ — that size fills the curve and freezes
-              the market in the same tx, before it can go dark
+              keep it under {fmtSol(GRADUATION_LAMPORTS)}◎. that size fills the whole curve
+              and freezes the market in the same tx, before it can go dark
             </p>
           )}
         </div>
@@ -259,21 +259,22 @@ export default function Create() {
           </div>
           {fairest && (
             <p className="note" style={{ marginTop: 6 }}>
-              your first buy is off — you enter through the same gate as everyone else
+              your first buy is off. you enter through the same gate as everyone else
             </p>
           )}
           {fairInfo && (
             <div className="fairbox">
               <p><span className="fb-k">every market here</span> already launches dark: entry is
                 gated, so bots and bundlers never get in. all trading happens inside the ephemeral
-                rollup — there is nothing on L1 to snipe. the graduation pool opens at a 2% fee
-                that fades to 0.25%, so flipping the fresh pool costs real money. LP locked, mint
-                revoked, metadata frozen.</p>
+                rollup, where there is nothing on L1 to snipe. the graduation pool opens at a 2%
+                fee that fades to 0.25%, so flipping the fresh pool costs real money. LP locked,
+                mint revoked, metadata frozen.</p>
               <p><span className="fb-k">fairest adds</span>: you give up the creator first-buy. no
-                pre-allocation, no head start — the curve is born untouched, and anyone can verify
+                pre-allocation, no head start. the curve is born untouched, and anyone can verify
                 on-chain that you started with zero.</p>
-              <p className="fb-soon">soon: an early-flip tax that fades to zero and pays into the
-                pool — scalpers fund the liquidity they tried to drain.</p>
+              <p className="fb-soon">it also carries an early-flip tax: 25% at first, fading to
+                zero over 30 minutes, and every taxed lamport goes into the graduation pool.
+                scalpers fund the liquidity they tried to drain.</p>
             </div>
           )}
         </div>
@@ -311,31 +312,34 @@ export default function Create() {
               ? `Launch + buy · ${fmtSol(fee + devLamports)}◎`
               : fee === 0 ? 'Launch dark' : `Launch dark · ${fmtSol(fee)}◎`}
           </button>
-          {publicKey && !canAfford && (
+          {publicKey && !canAfford && CLUSTER !== 'mainnet' && (
             <button className="btn ghost" disabled={busy} onClick={airdrop}>Airdrop 1◎</button>
           )}
         </div>
         {!publicKey && (
-          <p className="note">connect your wallet (top right) to launch — this is devnet, any wallet works</p>
+          <p className="note">
+            connect your wallet (top right) to launch{CLUSTER !== 'mainnet' && '. this is devnet, any wallet works'}
+          </p>
         )}
         {publicKey && valid === false && image === null && name && symbol && (
-          <p className="note">pick an image — markets without a face don&apos;t get traded</p>
+          <p className="note">pick an image. markets without a face don&apos;t get traded</p>
         )}
         {publicKey && !canAfford && bal !== null && (
           <p className="note">
-            you need {fmtSol(fee + devLamports)}◎ + dust — airdrop devnet SOL or top the wallet up
+            you need {fmtSol(fee + devLamports)}◎ plus a little dust.{' '}
+            {CLUSTER === 'mainnet' ? 'top the wallet up and this unlocks' : 'airdrop devnet SOL or top the wallet up'}
           </p>
         )}
         {devLamports > 0 ? (
           <p className="note">
             One transaction does all of it: the market is born, your buy lands on the
-            curve, and everything goes dark in the Ephemeral Rollup — your position
+            curve, and everything goes dark in the Ephemeral Rollup. Your position
             exists before anyone can even see the token.
           </p>
         ) : (
           <p className="note">
             The token mint exists from second zero with zero supply. All bonding happens dark
-            inside the Ephemeral Rollup — no L1 trail to snipe, no gas to pay.
+            inside the Ephemeral Rollup, with no L1 trail to snipe and no gas to pay.
           </p>
         )}
         {msg && <p className="ok">{msg}</p>}

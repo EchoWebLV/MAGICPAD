@@ -166,7 +166,7 @@ export async function buildReceipt(id: number): Promise<Receipt | null> {
     : reservesMatch && !ledgerMatches
       ? 'Reserves reconcile but per-trader fills do not. Either the recovered trades are out of sequence, or sessions settled against a history this sweep could not fully reach.'
       : sessions.length === 0
-        ? 'Nothing has settled yet — this market is still bonding, so there is no final ledger to check against. Reserves are compared against the rollup’s live state.'
+        ? 'Nothing has settled yet. This market is still bonding, so there is no final ledger to check against. Reserves are compared against the rollup’s live state.'
         : 'Reserves do not reconcile against the replayed trades. Treat this market as unverified until the full rollup history is reachable.';
 
   /* Can this market be checked at all, and if not, why not?
@@ -198,7 +198,7 @@ export async function buildReceipt(id: number): Promise<Receipt | null> {
     : verdict === 'FAILED'
       ? 'Every trade this market settled on was recovered, and replaying them does not reproduce the chain’s own numbers.'
       : !finalised
-        ? `This market is still ${STATE[l.state] === 'FROZEN' ? 'settling' : 'bonding'}. Its reserves are still moving, so there is no final ledger to check a replay against yet — pull this receipt again once it has settled.`
+        ? `This market is still ${STATE[l.state] === 'FROZEN' ? 'settling' : 'bonding'}. Its reserves are still moving, so there is no final ledger to check a replay against yet. Pull this receipt again once it has settled.`
         : sessions.length === 0
           ? 'No escrow sessions were ever opened against this market, so there is nothing to reconcile.'
           : 'This market traded, but no rollup node still holds the whole ledger. The money reconciles on L1; the order flow can no longer be fully recovered, so it can be neither confirmed nor faulted.';

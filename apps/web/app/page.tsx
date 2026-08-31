@@ -39,8 +39,8 @@ export default function Landing() {
             token
           </h1>
           <p>
-            No bundles. No snipers. The curve trades gasless in the dark until graduation —
-            then the market goes public.
+            No bundles. No snipers. Your token trades in the dark, gasless, until it
+            graduates. Then the market goes public.
           </p>
           <div className="lp-cta">
             <Link href="/create" className="btn lp-btn">
@@ -90,7 +90,7 @@ export default function Landing() {
                 </div>
               </Link>
             ) : (
-              <div key={i} className="lp-card lp-card-empty">{launches ? '—' : 'loading'}</div>
+              <div key={i} className="lp-card lp-card-empty">{launches ? '·' : 'loading'}</div>
             )
           ))}
         </div>
@@ -101,21 +101,21 @@ export default function Landing() {
           <img src="/step-create.png" alt="" />
           <div>
             <h3>Create token</h3>
-            <p>Set up your token with just a few clicks.</p>
+            <p>Pick a name, add an image, set your first buy. Done in a couple of clicks.</p>
           </div>
         </div>
         <div className="lp-step">
           <img src="/step-dark.png" alt="" />
           <div>
             <h3>Bond dark</h3>
-            <p>The curve trades gasless on the rollup — nothing to snipe.</p>
+            <p>Early trading happens out of sight, with zero gas. Snipers have nothing to aim at.</p>
           </div>
         </div>
         <div className="lp-step">
           <img src="/step-live.png" alt="" />
           <div>
             <h3>Go live</h3>
-            <p>Graduation takes the market public. Let the community in.</p>
+            <p>When the curve fills, the market graduates and goes public. Everyone gets in at once.</p>
           </div>
         </div>
       </section>
@@ -124,21 +124,21 @@ export default function Landing() {
         <div className="lp-stat">
           <span className="lp-ico">$</span>
           <div>
-            <b>{launches ? `${fmtSol(raised)}◎` : '—'}</b>
+            <b>{launches ? `${fmtSol(raised)}◎` : '…'}</b>
             <em>Total raised</em>
           </div>
         </div>
         <div className="lp-stat">
           <span className="lp-ico">↑</span>
           <div>
-            <b>{launches ? all.length : '—'}</b>
+            <b>{launches ? all.length : '…'}</b>
             <em>Launches</em>
           </div>
         </div>
         <div className="lp-stat">
           <span className="lp-ico">☺</span>
           <div>
-            <b>{launches ? traders.toLocaleString('en-US') : '—'}</b>
+            <b>{launches ? traders.toLocaleString('en-US') : '…'}</b>
             <em>Traders</em>
           </div>
         </div>
@@ -148,7 +148,7 @@ export default function Landing() {
         <img src="/mascot.png" alt="" />
         <div>
           <h2>Ready to launch something legendary?</h2>
-          <p>Join creators bonding in the dark — then graduating in the light.</p>
+          <p>Fair launches that come with receipts. No snipers, no bundles, no head starts.</p>
         </div>
         <Link href="/create" className="btn lp-btn">
           Start your launch <Glyph n="arrow" size={16} />

@@ -26,13 +26,13 @@ import { WalletLike, notifyActivity, sendWithWallet } from './wallet-tx';
 
 // ---- program errors, in human ---------------------------------------------
 const PROGRAM_ERROR_TEXT: Record<number, string> = {
-  6000: 'this market is closed — bonding has ended',
+  6000: 'this market is closed, bonding has ended',
   6002: 'deposit is below the minimum',
-  6003: 'that order is bigger than your free escrow — retry and it will top up first',
+  6003: 'that order is bigger than your free escrow, retry and it will top up first',
   6004: 'you are selling more tokens than you hold',
-  6010: 'trade key out of sync with this market — retry and it will re-sync',
-  6011: 'the curve rejected that size — try a different amount',
-  6013: 'ledger guard tripped — refresh and retry',
+  6010: 'trade key out of sync with this market, retry and it will re-sync',
+  6011: 'the curve rejected that size, try a different amount',
+  6013: 'ledger guard tripped, refresh and retry',
   6017: 'settlement pot not ready yet',
   6018: 'that top-up was already applied',
 };
@@ -234,7 +234,7 @@ export async function gateEntry(trader: PublicKey): Promise<{
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
-        throw new Error(`entry is gated — the app could not co-sign${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+        throw new Error(`entry is gated and the app could not co-sign${detail ? `: ${detail.slice(0, 200)}` : ''}`);
       }
       const { signature } = await res.json();
       tx.addSignature(key, Buffer.from(signature, 'base64'));
@@ -409,7 +409,7 @@ export async function topUpSession(wallet: WalletLike, id: number, lamports: num
   if (!(await applyNote(wallet, id, nonce, amount, 15))) {
     // a note is now parked — make sure the next attempt actually sweeps
     sweepClean.delete(memoKeyOf(id, trader));
-    throw new Error('escrow parked on L1 and the rollup is still syncing it — your next buy sweeps it in automatically');
+    throw new Error('escrow parked on L1 and the rollup is still syncing it. your next buy sweeps it in automatically');
   }
 }
 
@@ -545,7 +545,7 @@ export async function readPosition(trader: PublicKey, id: number): Promise<Posit
     data = (await connection.getAccountInfo(session))?.data ?? null;
     answered = true;
   }
-  if (!data && !answered) throw new Error('position unreadable — ER route down this tick');
+  if (!data && !answered) throw new Error('position unreadable, ER route down this tick');
   if (!data) return null;
   const s = decodeSession(data);
   return {

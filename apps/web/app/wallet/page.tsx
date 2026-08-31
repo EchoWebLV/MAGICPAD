@@ -14,7 +14,7 @@ import TokenArt from '../../components/TokenArt';
 import Glyph from '../../components/Glyph';
 import { copyText } from '../../lib/clip';
 import {
-  LaunchView, STATE, connection, fetchLaunches, fmtSol, fmtTok, sellQuote, solscanAccount,
+  CLUSTER, LaunchView, STATE, connection, fetchLaunches, fmtSol, fmtTok, sellQuote, solscanAccount,
 } from '../../lib/magicpad';
 import { PositionView, readPosition } from '../../lib/trade-live';
 import { privyEnabled, useActiveWallet } from '../../lib/use-active-wallet';
@@ -67,7 +67,7 @@ function Holdings({ owner }: { owner: PublicKey }) {
       </h3>
       {rows === null && <div className="empty">looking through the markets</div>}
       {rows !== null && rows.length === 0 && (
-        <div className="empty">nothing held yet — <Link className="linkish" href="/">find a market</Link></div>
+        <div className="empty">nothing held yet. <Link className="linkish" href="/">find a market</Link></div>
       )}
       {rows?.map(({ l, pos, value, escrow }) => {
         const pnl = value - pos.costBasis;
@@ -200,7 +200,7 @@ export default function WalletPage() {
             )}
           </div>
         )}
-        <div className="kv"><span className="k">network</span><span className="mono">Solana devnet</span></div>
+        <div className="kv"><span className="k">network</span><span className="mono">Solana {CLUSTER}</span></div>
         <div className="kv">
           <span className="k">balance</span>
           <span className="mono">{bal === null ? '…' : `${fmtSol(bal, 4)}◎`}</span>
@@ -213,7 +213,7 @@ export default function WalletPage() {
           </div>
         )}
 
-        <p className="dim addr-label">deposit address — scan or copy, then send devnet SOL to it</p>
+        <p className="dim addr-label">deposit address. scan or copy, then send {CLUSTER === 'mainnet' ? 'SOL' : 'devnet SOL'} to it</p>
         <div className="addr mono">{address}</div>
 
         <div className="wallet-actions">
@@ -223,7 +223,7 @@ export default function WalletPage() {
         </div>
 
         <p className="faint keynote">
-          Export opens Privy&apos;s own secure window — the key never touches this app.
+          Export opens Privy&apos;s own secure window. The key never touches this app.
         </p>
       </div>
       {publicKey && <Holdings owner={publicKey} />}

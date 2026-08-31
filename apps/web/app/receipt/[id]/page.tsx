@@ -36,9 +36,9 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const { id } = await params;
   const r = await load(id).catch(() => null);
-  if (!r) return { title: 'Receipt — Mooner' };
+  if (!r) return { title: 'Receipt · Mooner' };
   return {
-    title: `${r.symbol} settlement receipt — ${r.verdict}`,
+    title: `${r.symbol} settlement receipt: ${r.verdict}`,
     description: r.verdictReason,
   };
 }
@@ -165,7 +165,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
           Reserves alone are a weaker check than they look: under constant product the
           end state depends only on the sums, so two same-direction trades could be
           swapped without moving them. Each trader’s settled ledger is what closes
-          that door — a reordered sell fills at a different price, and a reordered buy
+          that door: a reordered sell fills at a different price, and a reordered buy
           receives a different number of tokens.
         </p>
         <div className="rc-card rc-scroll">
@@ -188,7 +188,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
               ))}
               {!o.ledger.length && (
                 <tr><td colSpan={5} className="faint" style={{ textAlign: 'left' }}>
-                  nothing settled yet — no ledger to hold the replay against
+                  nothing settled yet, so there is no ledger to hold the replay against
                 </td></tr>
               )}
             </tbody>
@@ -204,8 +204,8 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
           </span>
         </div>
         <p className="rc-note">
-          Hidden while the curve ran — this is what snipers could not read. Published
-          in full the moment it stopped, every line a real signed transaction.
+          This is the order flow nobody could read while the curve ran. It was published
+          in full the moment trading stopped, and every line is a real signed transaction.
         </p>
         <div className="rc-card rc-scroll">
           <table className="rc-t mono">
@@ -237,7 +237,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
             None of this needs Mooner to be honest, and none of it needs this page to
             be up. The verifier reads a public Solana RPC and the MagicBlock rollup
             nodes, rebuilds the market from scratch, and then diffs its own findings
-            against what this page served — so if we lied, it says so.
+            against what this page served. If we lied, it says so.
           </p>
           <div className="rc-cmd mono">node scripts/verify-receipt.mjs {r.mint} --against {origin}/api/receipt/{r.launchId}</div>
         </div>

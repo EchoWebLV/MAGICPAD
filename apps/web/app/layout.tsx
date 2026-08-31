@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'Mooner',
-  description: 'Launch your token in minutes. Bond in the dark, graduate in the light.',
+  description: 'Launch a token nobody can snipe. It trades in the dark until graduation, then goes public with a receipt that proves it was fair.',
 };
 
 export const viewport: Viewport = { themeColor: '#0a0a0a', colorScheme: 'dark' };

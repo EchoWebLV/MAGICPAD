@@ -46,7 +46,7 @@ export async function POST(req: Request) {
   const image = form.get('image');
   if (!(image instanceof File)) return bad('an image is required');
   if (!IMAGE_TYPES.includes(image.type)) return bad('image must be png, jpg, webp, or gif');
-  if (image.size > MAX_IMAGE) return bad('image too large — keep it under 2MB');
+  if (image.size > MAX_IMAGE) return bad('image too large, keep it under 2MB');
   const name = str(form, 'name', 32);
   const symbol = str(form, 'symbol', 10).toUpperCase();
   if (!name || !symbol) return bad('name and symbol are required');
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
       if (live?.name === name) return NextResponse.json({ cid, imageCid });
       await new Promise((r) => setTimeout(r, 4000));
     }
-    return bad('metadata pinned but no gateway serves it yet — try again in a minute', 502);
+    return bad('metadata pinned but no gateway serves it yet, try again in a minute', 502);
   } catch (e) {
     return bad(e instanceof Error ? e.message : String(e), 502);
   }

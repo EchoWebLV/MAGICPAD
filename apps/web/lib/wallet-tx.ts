@@ -5,7 +5,7 @@
  * Everything after rides the local session key, gasless, no popups. */
 
 import { Connection, Keypair, PublicKey, Transaction, TransactionSignature } from '@solana/web3.js';
-import { connection } from './magicpad';
+import { CLUSTER, connection } from './magicpad';
 
 export interface WalletLike {
   publicKey: PublicKey | null;
@@ -52,12 +52,15 @@ export async function sendWithWallet(
     const st = (await connection.getSignatureStatus(sig, { searchTransactionHistory: true })).value;
     if (st && !st.err && st.confirmationStatus) { notifyActivity(); return sig; }
     if (st?.err) throw new Error(`transaction failed: ${JSON.stringify(st.err)}`);
-    // signed, broadcast, and devnet never saw it — the wallet almost
+    // signed, broadcast, and this cluster never saw it: the wallet almost
     // certainly sent it to a different network
     throw new Error(
-      'the transaction never reached devnet — your SOL was not spent. '
-      + 'If your wallet is on Mainnet, switch it to Devnet '
-      + '(Phantom: Settings → Developer settings → Testnet mode → Solana Devnet) and retry.',
+      CLUSTER === 'mainnet'
+        ? 'the transaction never reached the network. your SOL was not spent. '
+          + 'if your wallet is set to a test network, switch it back to Solana Mainnet and retry.'
+        : 'the transaction never reached devnet. your SOL was not spent. '
+          + 'if your wallet is on Mainnet, switch it to Devnet '
+          + '(Phantom: Settings, Developer settings, Testnet mode, Solana Devnet) and retry.',
     );
   }
 }

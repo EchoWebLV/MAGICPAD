@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { BaseWalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import Glyph from './Glyph';
-import { connection, fmtSol, short } from '../lib/magicpad';
+import { CLUSTER, connection, fmtSol, short } from '../lib/magicpad';
 import { requestAirdrop } from '../lib/wallet-tx';
 import { privyEnabled, useActiveWallet } from '../lib/use-active-wallet';
 
@@ -64,7 +64,7 @@ export default function Nav() {
         {publicKey && bal !== null && (
           <span className="pill mono"><i className="dot" />{fmtSol(bal, 3)}◎</span>
         )}
-        {mounted && w.source === 'privy' && bal !== null && bal < 20_000_000 && (
+        {mounted && CLUSTER !== 'mainnet' && w.source === 'privy' && bal !== null && bal < 20_000_000 && (
           <button className="pill mono" onClick={drop} disabled={dropping}>
             {dropping ? 'dropping…' : '+1◎ devnet'}
           </button>

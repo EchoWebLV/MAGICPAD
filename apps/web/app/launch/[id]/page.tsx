@@ -510,7 +510,7 @@ export default function LaunchPage() {
                                 </a>
                               </td>
                               <td className="mono">{fmtTok(row.amount)}</td>
-                              <td className="mono faint">{sup > 0 ? (Number(row.amount) / sup * 100).toFixed(2) : '—' }%</td>
+                              <td className="mono faint">{sup > 0 ? (Number(row.amount) / sup * 100).toFixed(2) : '·' }%</td>
                             </tr>
                           );
                         })}
@@ -605,7 +605,7 @@ export default function LaunchPage() {
           <div className="trade-card">
             {onPool && (
               <p className="note" style={{ marginTop: 0 }}>
-                Live on Meteora — same buy/sell, wallet signs the swap.
+                Live on Meteora. Same buy and sell, your wallet signs the swap.
               </p>
             )}
             <div className="sides">
@@ -659,12 +659,12 @@ export default function LaunchPage() {
                 )}
                 {shortfall > 0 && walletCovers && (
                   <p className="note">
-                    over free escrow ({fmtSol(avail)}◎) — moves {fmtSol(shortfall)}◎ from wallet first.
+                    over free escrow ({fmtSol(avail)}◎), so {fmtSol(shortfall)}◎ moves from your wallet first.
                   </p>
                 )}
                 {shortfall > 0 && !walletCovers && (
                   <p className="err">
-                    {bal === null ? 'connect a wallet' : `wallet holds ${fmtSol(bal)}◎`} — need {fmtSol(shortfall)}◎ more.
+                    {bal === null ? 'connect a wallet' : `wallet holds ${fmtSol(bal)}◎`}, you need {fmtSol(shortfall)}◎ more.
                   </p>
                 )}
               </>
@@ -797,7 +797,7 @@ export default function LaunchPage() {
                   {attachPreview ? <img src={attachPreview} alt="token" /> : '+'}
                 </div>
                 <div className="hint">
-                  you launched this market before images existed —
+                  this market launched before images existed.
                   <br />pin one now and every board shows it
                 </div>
                 <input

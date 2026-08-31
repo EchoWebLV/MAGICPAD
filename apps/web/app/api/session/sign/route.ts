@@ -43,7 +43,7 @@ async function authorize(req: Request): Promise<string | null> {
   if (!token) throw new Error('sign in to open a session');
   const { PrivyClient } = await import('@privy-io/server-auth');
   const claims = await new PrivyClient(appId, secret).verifyAuthToken(token)
-    .catch(() => { throw new Error('session sign-in expired — log in again'); });
+    .catch(() => { throw new Error('session sign-in expired, log in again'); });
   return claims.userId;
 }
 

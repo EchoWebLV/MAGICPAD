@@ -74,7 +74,7 @@ export async function squashImage(file: File): Promise<File> {
   ctx.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 512, 512);
   bmp.close();
   const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/webp', 0.85));
-  if (!blob) throw new Error('could not process that image — try a png or jpg');
+  if (!blob) throw new Error('could not process that image, try a png or jpg');
   return new File([blob], 'token.webp', { type: 'image/webp' });
 }
 
