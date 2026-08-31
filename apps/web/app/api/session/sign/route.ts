@@ -15,11 +15,21 @@ export const runtime = 'nodejs';
 
 const PROGRAM_ID = new PublicKey((idl as { address: string }).address);
 const COMPUTE_BUDGET = 'ComputeBudget111111111111111111111111111111';
+// memo carries the launch's IPFS CID; it logs bytes and can touch nothing
+const MEMO = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
-// the ONLY instructions worth a gate signature: entry + its bundled delegate
+/* Instructions a gate signature may ride with. Session entry is the point;
+ * the rest is the buy-and-deploy launch bundle (create + first buy +
+ * delegation plumbing), which is still nothing but our own program moving
+ * the creator's own money. The gate key stays safe regardless of the mix:
+ * it is enforced non-payer and non-writable below, and its signature
+ * means anything only to the program's own gated-entry checks. */
 const ALLOWED = new Set(
   (idl as { instructions: { name: string; discriminator: number[] }[] }).instructions
-    .filter((i) => ['open_trade_session', 'delegate_trade_session', 'top_up_session', 'delegate_top_up'].includes(i.name))
+    .filter((i) => [
+      'open_trade_session', 'delegate_trade_session', 'top_up_session', 'delegate_top_up',
+      'create_launch', 'buy', 'delegate_launch',
+    ].includes(i.name))
     .map((i) => Buffer.from(i.discriminator).toString('hex')),
 );
 
@@ -80,7 +90,8 @@ export async function POST(req: Request) {
   try { msg = Message.from(raw); } catch { return NextResponse.json({ error: 'unparseable message' }, { status: 400 }); }
   for (const ix of msg.instructions) {
     const prog = msg.accountKeys[ix.programIdIndex];
-    if (prog.toBase58() === COMPUTE_BUDGET) continue;
+    const progId = prog.toBase58();
+    if (progId === COMPUTE_BUDGET || progId === MEMO) continue;
     if (!prog.equals(PROGRAM_ID)) {
       return NextResponse.json({ error: 'foreign program in transaction' }, { status: 400 });
     }
