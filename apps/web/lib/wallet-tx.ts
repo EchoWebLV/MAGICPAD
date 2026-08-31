@@ -33,13 +33,14 @@ export async function sendWithWallet(
   const bh = await connection.getLatestBlockhash('confirmed');
   tx.feePayer = wallet.publicKey;
   tx.recentBlockhash = bh.blockhash;
-  // partial signatures go on AFTER the message is pinned (they sign it);
-  // both wallet rails preserve them — Privy serializes and signs on top,
-  // adapters partial-sign the same tx object
-  if (extraSigners.length) tx.partialSign(...extraSigners);
-  // remote co-signatures (the entry gate) ride the same rule: message
-  // pinned first, then the signature lands via tx.addSignature
+  // the gate co-sign goes FIRST: it promotes the gate key to a required
+  // signer, and any signature made before that promotion is over a
+  // different message — web3.js drops it on the recompile
   if (cosign) await cosign(tx);
+  // partial signatures go on AFTER the signer set is final (they sign the
+  // compiled message); both wallet rails preserve them — Privy serializes
+  // and signs on top, adapters partial-sign the same tx object
+  if (extraSigners.length) tx.partialSign(...extraSigners);
   const sig = await wallet.sendTransaction(tx, connection, { maxRetries: 3 });
   try {
     const res = await connection.confirmTransaction({ signature: sig, ...bh }, 'confirmed');
