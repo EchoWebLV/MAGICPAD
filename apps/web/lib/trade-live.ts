@@ -554,7 +554,9 @@ export async function readPosition(trader: PublicKey, id: number): Promise<Posit
     solProceeds: (s.solProceeds as BN).toNumber(),
     tokensHeld: BigInt((s.tokensHeld as BN).toString()),
     costBasis: (s.costBasis as BN).toNumber(),
-    realizedLoss: (s.realizedLoss as BN).toNumber(),
+    // fairest traded this session slot for entry_ts — only the legacy IDL
+    // still carries realized_loss, everywhere else it reads as zero
+    realizedLoss: s.realizedLoss ? (s.realizedLoss as BN).toNumber() : 0,
     reconciled: s.reconciled as boolean,
     tokensClaimed: s.tokensClaimed as boolean,
   };
