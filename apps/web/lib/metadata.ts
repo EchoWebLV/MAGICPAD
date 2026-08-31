@@ -12,7 +12,7 @@
 import {
   PublicKey, SystemProgram, Transaction, TransactionInstruction,
 } from '@solana/web3.js';
-import { connection, launchPda } from './magicpad';
+import { CLUSTER, connection, launchPda } from './magicpad';
 
 // devnet-live verified: executable, and sig listings carry its memo text
 export const MEMO_PROGRAM = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
@@ -98,7 +98,9 @@ export function attachMetaTx(launchId: number, creator: PublicKey, cid: string):
 
 // ---- resolving -------------------------------------------------------------
 
-const CKEY = (id: number) => `magicpad_meta_${id}`;
+// cluster-scoped: one origin can serve both clusters (localhost did), and
+// launch ids restart per cluster — a bare id key wears the other chain's face
+const CKEY = (id: number) => `magicpad_meta_${CLUSTER}_${id}`;
 const mem = new Map<number, LaunchMeta | null>();
 const missAt = new Map<number, number>();      // negative cache — 60s
 const inflight = new Map<number, Promise<LaunchMeta | null>>();

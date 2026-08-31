@@ -7,12 +7,12 @@
  * at most every 45s to stay polite to public devnet. For the whole,
  * uncapped, shareable version of this same data see /api/receipt. */
 
-import { connection, erConnection, erLedgerEndpoints, launchPda } from './core';
+import { CLUSTER, connection, erConnection, erLedgerEndpoints, launchPda } from './core';
 import { HistEvent, HistKind, HistRow, sweepLayer } from './ledger';
 
 export type { HistEvent, HistKind, HistRow };
 
-const CKEY = (id: number) => `magicpad_hist_${id}`;
+const CKEY = (id: number) => `magicpad_hist_${CLUSTER}_${id}`; // ids restart per cluster
 const UI_SIG_CAP = 40;   // newest N signatures per layer
 const UI_EVENT_CAP = 60; // rows kept in the terminal
 

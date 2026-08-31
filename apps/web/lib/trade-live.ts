@@ -18,9 +18,9 @@ import {
   Connection, Keypair, PublicKey, SystemProgram, Transaction,
 } from '@solana/web3.js';
 import {
-  DLP, MIN_DEPOSIT, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, TOPUP_DISCRIMINATOR, TOPUP_SPACE,
-  connection, decodeLaunch, decodeSession, decodeTopUp, erConnection, erEndpointFor,
-  fetchGateKey, launchPda, mintPda, program, sessionPda, topupPda,
+  CLUSTER, DLP, MIN_DEPOSIT, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, TOPUP_DISCRIMINATOR,
+  TOPUP_SPACE, connection, decodeLaunch, decodeSession, decodeTopUp, erConnection,
+  erEndpointFor, fetchGateKey, launchPda, mintPda, program, sessionPda, topupPda,
 } from './magicpad';
 import { WalletLike, notifyActivity, sendWithWallet } from './wallet-tx';
 
@@ -60,7 +60,8 @@ function humanizeTradeError(e: unknown): Error {
 // v1 keys were random per browser; still honored while the chain has one
 // registered. The master signature is cached so the wallet signs once per
 // browser, ever.
-const skKey = (id: number, trader: PublicKey) => `magicpad_sk_${id}_${trader.toBase58()}`;
+const skKey = (id: number, trader: PublicKey) =>
+  `magicpad_sk_${CLUSTER}_${id}_${trader.toBase58()}`; // ids restart per cluster
 const masterKey = (trader: PublicKey) => `magicpad_master_${trader.toBase58()}`;
 
 function legacyKeyFor(id: number, trader: PublicKey): Keypair | null {
