@@ -5,6 +5,7 @@
  * same numbers from a public RPC, which is why the page ends by telling
  * you how to check it instead of asking you to believe it. */
 
+import { cache } from 'react';
 import { headers } from 'next/headers';
 import Link from 'next/link';
 import type { Metadata } from 'next';
@@ -26,16 +27,25 @@ const scanAcct = (a: string) => `https://solscan.io/account/${a}${suffix}`;
 const when = (ms: number) =>
   new Date(ms).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
 
-async function load(param: string): Promise<Receipt | null> {
-  const id = await resolveLaunchId(param);
-  return id === null ? null : buildReceipt(id);
-}
+/* One build per request: cache() dedupes the generateMetadata call and the
+ * page render onto the same promise, halving the RPC walk and killing the
+ * split-brain where the title carried a verdict while the body claimed the
+ * market did not exist. An RPC failure is kept apart from a real miss —
+ * "the chain would not answer" is not "no such market". */
+const load = cache(async (param: string): Promise<{ r: Receipt | null; failed: boolean }> => {
+  try {
+    const id = await resolveLaunchId(param);
+    return { r: id === null ? null : await buildReceipt(id), failed: false };
+  } catch {
+    return { r: null, failed: true };
+  }
+});
 
 export async function generateMetadata(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Metadata> {
   const { id } = await params;
-  const r = await load(id).catch(() => null);
+  const { r } = await load(id);
   if (!r) return { title: 'Receipt · Mooner' };
   return {
     title: `${r.symbol} settlement receipt: ${r.verdict}`,
@@ -50,7 +60,7 @@ function Check({ state }: { state: 'y' | 'n' | 'q' }) {
 
 export default async function ReceiptPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: param } = await params;
-  const r = await load(param).catch(() => null);
+  const { r, failed } = await load(param);
   const h = await headers();
   const origin = `${h.get('x-forwarded-proto') ?? 'http'}://${h.get('host') ?? 'localhost:3020'}`;
 
@@ -58,8 +68,13 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
     return (
       <main className="rc">
         <Link href="/explore" className="rc-back">← all markets</Link>
-        <div className="rc-head"><h1 className="rc-title">No such market</h1>
-          <p className="rc-sub">Nothing on this program matches <span className="mono">{param}</span>.</p>
+        <div className="rc-head">
+          <h1 className="rc-title">{failed ? 'Receipt unavailable right now' : 'No such market'}</h1>
+          <p className="rc-sub">
+            {failed
+              ? 'The chain did not answer while this receipt was being rebuilt. The market is fine. Refresh in a moment.'
+              : <>Nothing on this program matches <span className="mono">{param}</span>.</>}
+          </p>
         </div>
       </main>
     );
@@ -100,7 +115,10 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
           Every trader escrows into their own session account, and settlement moves
           the losers’ net into the pot before any winner can draw from it. Summing
           each session’s signed net has to land on the launch’s own{' '}
-          <span className="mono">real_sol_raised</span>. Nothing else moved.
+          <span className="mono">real_sol_raised</span>
+          {m.flipPot > 0 && <>{' '}plus the flip pot: this market ran in fairest mode,
+          so early flips were taxed and every taxed lamport stayed in the pool</>}.
+          Nothing else moved.
         </p>
         <div className="rc-card rc-scroll">
           <table className="rc-t mono">
@@ -130,6 +148,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
                 <td>Σ nets</td>
                 <td colSpan={3} className="faint" style={{ textAlign: 'left' }}>
                   must equal real_sol_raised {m.realSolRaised.toLocaleString('en-US')}
+                  {m.flipPot > 0 && <> + flip pot {m.flipPot.toLocaleString('en-US')}</>}
                 </td>
                 <td colSpan={2}>{m.sumNets.toLocaleString('en-US')} lamports</td>
               </tr>
@@ -167,6 +186,8 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
           swapped without moving them. Each trader’s settled ledger is what closes
           that door: a reordered sell fills at a different price, and a reordered buy
           receives a different number of tokens.
+          {m.flipPot > 0 && <>{' '}Sells are replayed net of the early-flip tax,
+          and the replayed taxes must sum to the flip pot on chain.</>}
         </p>
         <div className="rc-card rc-scroll">
           <table className="rc-t mono">

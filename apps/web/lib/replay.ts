@@ -6,7 +6,7 @@
 
 import {
   LAMPORTS, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, VIRTUAL_SOL_INIT as VS0, VIRTUAL_TOK_INIT as VT0,
-  buyQuote, sellQuote,
+  buyQuote, flipTaxAt, sellQuote, weightedEntryTs,
 } from './core';
 import { HistEvent, HistRow } from './ledger';
 
@@ -109,11 +109,23 @@ export function sma(candles: Candle[], period: number): { time: number; value: n
   return out;
 }
 
-export interface TraderLedger { spent: number; proceeds: number; tokensHeld: number }
+export interface TraderLedger {
+  spent: number;
+  /** net of any flip tax — directly comparable to the session's sol_proceeds */
+  proceeds: number;
+  tokensHeld: number;
+  /** flip tax replayed at each sell's block time (0 outside fairest mode) */
+  tax: number;
+  /** tax bounds at ±2s of clock-vs-blocktime skew: taxLo at age+2, taxHi at age−2 */
+  taxLo: number;
+  taxHi: number;
+}
 export interface LedgerReplay {
   endVs: bigint;
   endVt: bigint;
   byTrader: Record<string, TraderLedger>;
+  /** Σ tax over every sell — must land on the launch's flip_pot exactly */
+  totalTax: number;
 }
 
 /* Replay that also rebuilds each trader's ledger, not just the reserves.
@@ -125,26 +137,52 @@ export interface LedgerReplay {
  * (proceeds move) and a reordered buy receives a different number of
  * tokens (tokensHeld moves). Checked against the TradeSession accounts
  * the program actually settled on, the three together leave a published
- * trade log nowhere to hide. */
-export function replayLedger(rows: HistRow[]): LedgerReplay {
+ * trade log nowhere to hide.
+ *
+ * Fairest mode adds one wrinkle: the program credits sellers net of the
+ * flip tax. The tax is pure math over (sol_out, weighted entry ts, clock),
+ * so the replay recomputes it from each trade's block time — the same
+ * per-slot clock the program read. taxLo/taxHi carry a ±2s skew band so
+ * one second of clock drift cannot brand an honest market a cheat; the
+ * exact pot equality (Σ tax == flip_pot) is checked chain-vs-chain by the
+ * caller and has no time in it at all. */
+export function replayLedger(rows: HistRow[], fairMode = false): LedgerReplay {
   let vs = VS0;
   let vt = VT0;
   const byTrader: Record<string, TraderLedger> = {};
-  const of = (a: string) => (byTrader[a] ??= { spent: 0, proceeds: 0, tokensHeld: 0 });
+  const entryTs: Record<string, bigint> = {};
+  const of = (a: string) =>
+    (byTrader[a] ??= { spent: 0, proceeds: 0, tokensHeld: 0, tax: 0, taxLo: 0, taxHi: 0 });
+  let totalTax = 0;
   for (const e of [...rows].sort((a, b) => a.at - b.at || (a.slot ?? 0) - (b.slot ?? 0))) {
+    const now = BigInt(Math.floor(e.at / 1000));
     if (e.kind === 'BUY' && e.sol) {
       const inn = BigInt(e.sol);
       const out = buyQuote(vs, vt, inn);
       vs += inn; vt -= out;
       const t = of(e.actor);
+      if (fairMode) {
+        entryTs[e.actor] = weightedEntryTs(
+          entryTs[e.actor] ?? 0n, BigInt(t.tokensHeld), now, out,
+        );
+      }
       t.spent += e.sol; t.tokensHeld += Number(out);
     } else if (e.kind === 'SELL' && e.tok) {
       const tin = BigInt(e.tok);
       const out = sellQuote(vs, vt, tin);
       vs -= out; vt += tin;
       const t = of(e.actor);
-      t.proceeds += Number(out); t.tokensHeld -= e.tok;
+      let tax = 0n;
+      if (fairMode) {
+        const entry = entryTs[e.actor] ?? 0n;
+        tax = flipTaxAt(out, entry, now);
+        t.taxLo += Number(flipTaxAt(out, entry, now + 2n));
+        t.taxHi += Number(flipTaxAt(out, entry, now - 2n));
+      }
+      t.tax += Number(tax);
+      totalTax += Number(tax);
+      t.proceeds += Number(out - tax); t.tokensHeld -= e.tok;
     }
   }
-  return { endVs: vs, endVt: vt, byTrader };
+  return { endVs: vs, endVt: vt, byTrader, totalTax };
 }

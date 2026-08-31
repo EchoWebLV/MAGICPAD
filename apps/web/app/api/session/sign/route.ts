@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { Keypair, Message, PublicKey, Transaction } from '@solana/web3.js';
 import { utils } from '@coral-xyz/anchor';
 import fs from 'node:fs';
-import idl from '../../../../lib/idl.json';
+import { idl } from '../../../../lib/core';
 
 export const runtime = 'nodejs';
 

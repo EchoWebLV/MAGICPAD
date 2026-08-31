@@ -15,9 +15,8 @@ import { BN, BorshAccountsCoder, BorshInstructionCoder, utils } from '@coral-xyz
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
   PLATFORM, PROGRAM_ID, connection, erConnection, erEndpointFor, erLedgerEndpoints,
-  launchPda, mintPda, sessionPda,
+  idl, launchPda, mintPda, sessionPda,
 } from './core';
-import idl from './idl.json';
 
 export type HistKind =
   | 'LAUNCH' | 'DEPOSIT' | 'TOPUP' | 'BUY' | 'SELL'
@@ -33,12 +32,34 @@ export interface HistEvent {
   sol?: number;    // lamports
   tok?: number;    // raw token units
   slot?: number;
+  /** LAUNCH only: the create_launch fair arg. Absent on markets created
+   *  before fairest mode existed — their flip_pot slot holds leftover
+   *  bytes from an older field, and this flag is what says so. */
+  fair?: boolean;
 }
 export type HistRow = HistEvent & { actor: string };
 
 const ixCoder = new BorshInstructionCoder(idl as any);
 const acctCoder = new BorshAccountsCoder(idl as any);
 const bnNum = (v: any) => Number(v?.toString?.() ?? v);
+
+/* create_launch is parsed by hand: its arg list grew a trailing `fair`
+ * bool, so the current coder chokes on creations from before the upgrade
+ * and would drop the market's own LAUNCH event. The byte layout is just
+ * disc(8) + name + symbol (+ fair) — read it directly, any vintage. */
+const CREATE_LAUNCH_DISC = Buffer.from(
+  (idl as any).instructions.find((i: any) => i.name === 'create_launch').discriminator,
+);
+function parseCreateLaunch(raw: Buffer): { fair?: boolean } | null {
+  if (raw.length < 8 || !raw.subarray(0, 8).equals(CREATE_LAUNCH_DISC)) return null;
+  let off = 8;
+  for (let s = 0; s < 2; s++) { // name, symbol
+    if (off + 4 > raw.length) return null;
+    off += 4 + raw.readUInt32LE(off);
+  }
+  if (off > raw.length) return null;
+  return off < raw.length ? { fair: raw[off] === 1 } : {};
+}
 
 /* A bare BorshAccountsCoder keys off the raw IDL: PascalCase account
  * names, snake_case fields. Anchor's Program camel-cases the IDL before
@@ -74,13 +95,14 @@ export function parseTx(
     const pid = keys[ix.programIdIndex];
     if (!pid || !pid.equals(PROGRAM_ID)) continue;
     const raw = typeof ix.data === 'string' ? utils.bytes.bs58.decode(ix.data) : ix.data;
+    const base = { sig, at, er, signer, slot };
+    const created = parseCreateLaunch(Buffer.from(raw));
+    if (created) { out.push({ ...base, kind: 'LAUNCH', sol: 1_000_000_000, ...created }); continue; }
     let dec = null;
     try { dec = ixCoder.decode(Buffer.from(raw)); } catch { /* foreign layout */ }
     if (!dec) continue;
     const a: any = dec.data;
-    const base = { sig, at, er, signer, slot };
     switch (dec.name) {
-      case 'create_launch': out.push({ ...base, kind: 'LAUNCH', sol: 1_000_000_000 }); break;
       case 'open_trade_session':
         sk[a.session_key.toBase58()] = signer;
         out.push({ ...base, kind: 'DEPOSIT', sol: bnNum(a.deposit) }); break;

@@ -40,30 +40,39 @@ import { BorshAccountsCoder, BorshInstructionCoder, utils } from '@coral-xyz/anc
 import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const idl = JSON.parse(readFileSync(resolve(HERE, '../apps/web/lib/idl.json'), 'utf8'));
+
+function webEnv(name) {
+  try {
+    const e = readFileSync(resolve(HERE, '../apps/web/.env.local'), 'utf8');
+    return (e.match(new RegExp(`^${name}=(.*)$`, 'm')) || [])[1]?.trim() || null;
+  } catch { return null; }
+}
+
+// One codebase, two deployments — mirror apps/web/lib/core.ts: the devnet
+// demo speaks the old IDL, mainnet runs v3 (fairest mode, flip_pot).
+const CLUSTER = process.env.CLUSTER || webEnv('NEXT_PUBLIC_CLUSTER') || 'mainnet';
+const MAINNET = CLUSTER === 'mainnet';
+const idl = JSON.parse(readFileSync(
+  resolve(HERE, MAINNET ? '../apps/web/lib/idl-v3.json' : '../apps/web/lib/idl.json'), 'utf8'));
 
 const PROGRAM_ID = new PublicKey(idl.address);
 const VS0 = 30_000_000_000n;                 // constants.rs VIRTUAL_SOL_INIT
 const VT0 = 1_073_000_000_000_000n;          // constants.rs VIRTUAL_TOK_INIT
 const STATE = ['BONDING', 'FROZEN', 'RECONCILED', 'GRADUATED'];
-const ER_NODES = (process.env.ER_NODES
-  || 'https://devnet-as.magicblock.app,https://devnet.magicblock.app')
+const ER_NODES = (process.env.ER_NODES || webEnv('NEXT_PUBLIC_ER_NODES')
+  || (MAINNET ? 'https://eu.magicblock.app'
+    : 'https://devnet-as.magicblock.app,https://devnet.magicblock.app'))
   .split(',').map((s) => s.trim()).filter(Boolean);
-const ROUTER = process.env.ROUTER_URL || 'https://devnet-router.magicblock.app';
+const ROUTER = process.env.ROUTER_URL || webEnv('NEXT_PUBLIC_ROUTER_URL')
+  || (MAINNET ? 'https://router.magicblock.app' : 'https://devnet-router.magicblock.app');
 
 const args = process.argv.slice(2);
 const flag = (n) => { const i = args.indexOf(n); return i < 0 ? null : args[i + 1]; };
 const has = (n) => args.includes(n);
 const target = args.find((a) => !a.startsWith('--') && args[args.indexOf(a) - 1] !== '--against');
 const JSON_OUT = has('--json');
-const rpcUrl = flag('--rpc') || process.env.RPC_URL || envFromWeb() || clusterApiUrl('devnet');
-
-function envFromWeb() {
-  try {
-    const e = readFileSync(resolve(HERE, '../apps/web/.env.local'), 'utf8');
-    return (e.match(/^NEXT_PUBLIC_RPC_URL=(.*)$/m) || [])[1]?.trim() || null;
-  } catch { return null; }
-}
+const rpcUrl = flag('--rpc') || process.env.RPC_URL || webEnv('NEXT_PUBLIC_RPC_URL')
+  || clusterApiUrl(MAINNET ? 'mainnet-beta' : 'devnet');
 
 const ixCoder = new BorshInstructionCoder(idl);
 const acctCoder = new BorshAccountsCoder(idl);
@@ -86,6 +95,23 @@ const sellQuote = (vs, vt, tin) => {
   return nvs >= vs ? 0n : vs - nvs;
 };
 
+// ---- fairest mode, mirroring programs/magicpad/src/fair.rs ----------------
+// The flip tax is pure math over (sol_out, weighted entry ts, clock), so a
+// replay recomputes it from block times — the same per-slot clock the
+// program read. Sellers are credited net of it; the tax accrues on the
+// launch as flip_pot (i64, -1 when the mode is off).
+const FLIP_TAX_START_BPS = 2_500n;
+const FLIP_DECAY_SECS = 1_800n;
+const weightedEntryTs = (entry, held, now, bought) => {
+  const total = held + bought;
+  return total === 0n ? entry : (entry * held + now * bought) / total;
+};
+const flipTaxAt = (out, entry, now) => {
+  const age = now > entry ? now - entry : 0n;
+  if (age >= FLIP_DECAY_SECS) return 0n;
+  return out * (FLIP_TAX_START_BPS * (FLIP_DECAY_SECS - age) / FLIP_DECAY_SECS) / 10_000n;
+};
+
 async function allSignatures(conn, addr) {
   const acc = [];
   let before;
@@ -100,6 +126,23 @@ async function allSignatures(conn, addr) {
   return acc.reverse(); // oldest first — deposits name session keys before their trades
 }
 
+/* create_launch is parsed by hand: its arg list grew a trailing `fair`
+ * bool, so the current coder chokes on creations from before the upgrade
+ * and would drop the market's own LAUNCH event. disc(8) + name + symbol
+ * (+ fair) — read the bytes directly, any vintage. */
+const CREATE_LAUNCH_DISC = Buffer.from(
+  idl.instructions.find((i) => i.name === 'create_launch').discriminator);
+function parseCreateLaunch(raw) {
+  if (raw.length < 8 || !raw.subarray(0, 8).equals(CREATE_LAUNCH_DISC)) return null;
+  let off = 8;
+  for (let s = 0; s < 2; s++) { // name, symbol
+    if (off + 4 > raw.length) return null;
+    off += 4 + raw.readUInt32LE(off);
+  }
+  if (off > raw.length) return null;
+  return off < raw.length ? { fair: raw[off] === 1 } : {};
+}
+
 function parseTx(tx, sig, er, sk, slot) {
   const msg = tx.transaction.message;
   const keys = msg.staticAccountKeys ?? msg.accountKeys;
@@ -110,6 +153,11 @@ function parseTx(tx, sig, er, sk, slot) {
     const pid = keys[ix.programIdIndex];
     if (!pid || !pid.equals(PROGRAM_ID)) continue;
     const raw = typeof ix.data === 'string' ? utils.bytes.bs58.decode(ix.data) : ix.data;
+    const created = parseCreateLaunch(Buffer.from(raw));
+    if (created) {
+      out.push({ sig, at, er, signer, slot, kind: 'LAUNCH', ...created });
+      continue;
+    }
     let dec = null;
     try { dec = ixCoder.decode(Buffer.from(raw)); } catch { continue; }
     if (!dec) continue;
@@ -225,22 +273,48 @@ async function main() {
     .sort((a, b) => a.at - b.at || (a.slot ?? 0) - (b.slot ?? 0));
 
   // ---- ORDERING: replay reserves AND every trader's ledger ---------------
+  // flip_pot: i64, -1 = fairest mode off; >= 0 = armed, holding the taxes.
+  // (The old devnet IDL has no such field — undefined reads as mode off.)
+  // Fairest mode needs BOTH signals: pot slot >= 0 AND the create_launch tx
+  // carried fair=true. Markets born before the fair upgrade reuse the slot's
+  // bytes for an older timestamp field; misreading either way only ever
+  // FAILS a receipt, so a forged flag cannot buy a false VERIFIED.
+  const flipPotRaw = acct.flipPot === undefined ? -1 : num(acct.flipPot);
+  const fairLaunch = events.some((e) => e.kind === 'LAUNCH' && e.fair === true);
+  const fairMode = flipPotRaw >= 0 && fairLaunch;
+  const flipPot = fairMode ? flipPotRaw : 0;
+
   let vs = VS0;
   let vt = VT0;
   const byTrader = {};
-  const of = (a) => (byTrader[a] ??= { spent: 0, proceeds: 0, tokensHeld: 0 });
+  const entryTs = {};
+  const of = (a) => (byTrader[a] ??= { spent: 0, proceeds: 0, tokensHeld: 0, tax: 0, taxLo: 0, taxHi: 0 });
   for (const e of events) {
     const actor = sk[e.signer] ?? e.signer;
+    const now = BigInt(Math.floor(e.at / 1000));
     if (e.kind === 'BUY' && e.sol) {
       const i = BigInt(e.sol);
       const out = buyQuote(vs, vt, i);
       vt -= out; vs += i;
-      const t = of(actor); t.spent += e.sol; t.tokensHeld += Number(out);
+      const t = of(actor);
+      // entry stamped BEFORE tokens_held moves (trade.rs buy)
+      if (fairMode) entryTs[actor] = weightedEntryTs(entryTs[actor] ?? 0n, BigInt(t.tokensHeld), now, out);
+      t.spent += e.sol; t.tokensHeld += Number(out);
     } else if (e.kind === 'SELL' && e.tok) {
       const tin = BigInt(e.tok);
       const out = sellQuote(vs, vt, tin);
       vs -= out; vt += tin;
-      const t = of(actor); t.proceeds += Number(out); t.tokensHeld -= e.tok;
+      const t = of(actor);
+      let tax = 0n;
+      if (fairMode) {
+        const entry = entryTs[actor] ?? 0n;
+        tax = flipTaxAt(out, entry, now);
+        // ±2s of clock-vs-blocktime skew on the tax, nothing else
+        t.taxLo += Number(flipTaxAt(out, entry, now + 2n));
+        t.taxHi += Number(flipTaxAt(out, entry, now - 2n));
+      }
+      t.tax += Number(tax);
+      t.proceeds += Number(out - tax); t.tokensHeld -= e.tok;
     }
   }
   const chainVs = BigInt(num(acct.virtualSol));
@@ -264,22 +338,37 @@ async function main() {
       net: num(s.solSpent) - num(s.solProceeds), reconciled: !!s.reconciled,
     };
   });
-  const ledger = sessions.map((s) => {
-    const r = byTrader[s.trader] ?? { spent: 0, proceeds: 0, tokensHeld: 0 };
+  // exact first; the ±2s band only forgives clock skew on the tax, and only
+  // when the pot equality (chain-vs-chain, no time in it) holds to the lamport
+  const blank = { spent: 0, proceeds: 0, tokensHeld: 0, tax: 0, taxLo: 0, taxHi: 0 };
+  const pre = sessions.map((s) => {
+    const r = byTrader[s.trader] ?? blank;
+    const gross = r.proceeds + r.tax;
     return {
-      trader: s.trader,
-      replaySpent: r.spent, chainSpent: s.solSpent,
-      replayProceeds: r.proceeds, chainProceeds: s.solProceeds,
-      replayTokens: r.tokensHeld, chainTokens: s.tokensHeld,
-      matches: r.spent === s.solSpent && r.proceeds === s.solProceeds
-        && r.tokensHeld === s.tokensHeld,
+      s,
+      r,
+      baseOk: r.spent === s.solSpent && r.tokensHeld === s.tokensHeld,
+      proceedsExact: r.proceeds === s.solProceeds,
+      proceedsInBand: s.solProceeds >= gross - r.taxHi && s.solProceeds <= gross - r.taxLo,
+      grossDiff: gross - s.solProceeds,
     };
   });
-  const ledgerMatches = ledger.length > 0 && ledger.every((x) => x.matches);
+  const potMatches = !fairMode || pre.reduce((a, x) => a + x.grossDiff, 0) === flipPot;
+  const ledger = pre.map(({ s, r, baseOk, proceedsExact, proceedsInBand }) => ({
+    trader: s.trader,
+    replaySpent: r.spent, chainSpent: s.solSpent,
+    replayProceeds: r.proceeds, chainProceeds: s.solProceeds,
+    replayTokens: r.tokensHeld, chainTokens: s.tokensHeld,
+    replayTax: r.tax,
+    matches: baseOk && (proceedsExact || (fairMode && proceedsInBand && potMatches)),
+  }));
+  const ledgerMatches = ledger.length > 0 && ledger.every((x) => x.matches) && potMatches;
   const ordering = reservesMatch && ledgerMatches;
   const sumNets = sessions.reduce((a, s) => a + s.net, 0);
   const realSolRaised = num(acct.realSolRaised);
-  const money = sumNets === realSolRaised;
+  // fairest mode keeps the taxes inside the system: they sit in the pot,
+  // so conservation is real_sol_raised PLUS flip_pot
+  const money = sumNets === realSolRaised + flipPot;
 
   // Three states, not two. A market still bonding has no final ledger to
   // check against, and a settled one whose rollup ledger has been pruned
@@ -312,7 +401,7 @@ async function main() {
       events: events.length, trades,
       sessions: sessions.length, scannedL1: l1.scanned, scannedEr: erScanned,
     },
-    money: { realSolRaised, sumNets, balances: money },
+    money: { realSolRaised, sumNets, flipPot, balances: money },
     ordering: {
       replayVirtualSol: vs.toString(), replayVirtualTok: vt.toString(),
       chainVirtualSol: chainVs.toString(), chainVirtualTok: chainVt.toString(),
@@ -369,7 +458,7 @@ async function main() {
   for (const s of sessions) {
     console.log(`     ${s.trader.slice(0, 8)}…  deposit ${sol(s.deposit)}  spent ${sol(s.solSpent)}  proceeds ${sol(s.solProceeds)}  net ${sol(s.net)}${s.reconciled ? '' : '  (unsettled)'}`);
   }
-  console.log(`     Sigma nets ${sumNets}  ==  real_sol_raised ${realSolRaised}   ${tick(money)}`);
+  console.log(`     Sigma nets ${sumNets}  ==  real_sol_raised ${realSolRaised}${fairMode ? ` + flip_pot ${flipPot}` : ''}   ${tick(money)}`);
 
   console.log(`\n  ── RESERVES ─ ${tick(reservesMatch)}   (catches a dropped, extra or altered trade)`);
   console.log(`     replay  vs ${vs}  vt ${vt}`);
@@ -382,6 +471,12 @@ async function main() {
     console.log(`        spent    replay ${String(c.replaySpent).padStart(16)}   chain ${String(c.chainSpent).padStart(16)}`);
     console.log(`        proceeds replay ${String(c.replayProceeds).padStart(16)}   chain ${String(c.chainProceeds).padStart(16)}`);
     console.log(`        tokens   replay ${String(c.replayTokens).padStart(16)}   chain ${String(c.chainTokens).padStart(16)}`);
+    if (fairMode && c.replayTax > 0) {
+      console.log(`        flip tax replay ${String(c.replayTax).padStart(16)}   (net of tax above)`);
+    }
+  }
+  if (fairMode) {
+    console.log(`     replayed taxes must sit in the flip pot: ${pre.reduce((a, x) => a + x.grossDiff, 0)} == ${flipPot}   ${tick(potMatches)}`);
   }
 
   if (served) {

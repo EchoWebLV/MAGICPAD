@@ -34,6 +34,8 @@ export interface LedgerCheck {
   replaySpent: number; chainSpent: number;
   replayProceeds: number; chainProceeds: number;
   replayTokens: number; chainTokens: number;
+  /** flip tax the replay carved from this trader's sells (0 outside fairest mode) */
+  replayTax: number;
   matches: boolean;
 }
 
@@ -67,6 +69,8 @@ export interface Receipt {
     sessionsSettled: number;
     potLamports: number;
     graduationTargetLamports: number;
+    /** the on-chain flip pot: early-flip taxes waiting to ship with the raise (0 when not fairest) */
+    flipPot: number;
   };
   ordering: {
     /** end reserves: catches dropped, inserted and amount-tampered trades */
@@ -131,22 +135,51 @@ export async function buildReceipt(id: number): Promise<Receipt | null> {
   const chainVt = BigInt(n(l.virtualTok));
   const reservesMatch = rep.endVs === chainVs && rep.endVt === chainVt;
 
+  // Fairest mode leaves a fingerprint on the ledger: sellers are credited
+  // net of the flip tax, and the tax sits on the launch as flip_pot
+  // (i64, -1 when the mode is off).
+  /* Fairest mode needs BOTH signals: the launch account's pot slot is
+   * non-negative AND the create_launch tx itself carried fair=true. The
+   * second guard matters because markets born before the fair upgrade
+   * reuse that slot's bytes for an older field — a leftover timestamp
+   * would otherwise read as an enormous pot. Misreading either way only
+   * ever FAILS a receipt (the money identity stops closing), so a forged
+   * flag cannot buy a false VERIFIED. */
+  const flipPotRaw = n(l.flipPot);
+  const fairLaunch = sweep.rows.some((r) => r.kind === 'LAUNCH' && r.fair === true);
+  const fairMode = flipPotRaw >= 0 && fairLaunch;
+  const flipPot = fairMode ? flipPotRaw : 0;
+
   // Reserves alone cannot see a reordering — replay each trader's fills and
   // hold them against the session accounts settlement actually ran on.
-  const led = replayLedger(sweep.rows);
-  const ledger: LedgerCheck[] = sessions.map((s) => {
-    const r = led.byTrader[s.trader] ?? { spent: 0, proceeds: 0, tokensHeld: 0 };
+  const led = replayLedger(sweep.rows, fairMode);
+  const blank = { spent: 0, proceeds: 0, tokensHeld: 0, tax: 0, taxLo: 0, taxHi: 0 };
+  const pre = sessions.map((s) => {
+    const r = led.byTrader[s.trader] ?? blank;
+    const gross = r.proceeds + r.tax;
     return {
-      trader: s.trader,
-      session: s.pda,
-      replaySpent: r.spent, chainSpent: s.solSpent,
-      replayProceeds: r.proceeds, chainProceeds: s.solProceeds,
-      replayTokens: r.tokensHeld, chainTokens: s.tokensHeld,
-      matches: r.spent === s.solSpent && r.proceeds === s.solProceeds
-        && r.tokensHeld === s.tokensHeld,
+      s,
+      r,
+      baseOk: r.spent === s.solSpent && r.tokensHeld === s.tokensHeld,
+      proceedsExact: r.proceeds === s.solProceeds,
+      // ±2s of clock-vs-blocktime skew on the tax, nothing else
+      proceedsInBand: s.solProceeds >= gross - r.taxHi && s.solProceeds <= gross - r.taxLo,
+      grossDiff: gross - s.solProceeds,
     };
   });
-  const ledgerMatches = ledger.length > 0 && ledger.every((x) => x.matches);
+  // chain-vs-chain and time-free: every lamport the sellers were shorted
+  // must be sitting in the flip pot
+  const potMatches = !fairMode || pre.reduce((a, x) => a + x.grossDiff, 0) === flipPot;
+  const ledger: LedgerCheck[] = pre.map(({ s, r, baseOk, proceedsExact, proceedsInBand }) => ({
+    trader: s.trader,
+    session: s.pda,
+    replaySpent: r.spent, chainSpent: s.solSpent,
+    replayProceeds: r.proceeds, chainProceeds: s.solProceeds,
+    replayTokens: r.tokensHeld, chainTokens: s.tokensHeld,
+    replayTax: r.tax,
+    matches: baseOk && (proceedsExact || (fairMode && proceedsInBand && potMatches)),
+  }));
+  const ledgerMatches = ledger.length > 0 && ledger.every((x) => x.matches) && potMatches;
   const matches = reservesMatch && ledgerMatches;
 
   const sumNets = sessions.reduce((s, x) => s + x.net, 0);
@@ -187,7 +220,9 @@ export async function buildReceipt(id: number): Promise<Receipt | null> {
   const historyIncomplete = trades === 0
     || sessions.some((s) => (led.byTrader[s.trader]?.spent ?? 0) < s.solSpent);
 
-  const verdict: Verdict = matches && sumNets === realSolRaised
+  // in fairest mode the taxes never left the system: they sit in the pot,
+  // so the conservation line is real_sol_raised PLUS the pot
+  const verdict: Verdict = matches && sumNets === realSolRaised + flipPot
     ? 'VERIFIED'
     : !finalised || historyIncomplete || sessions.length === 0
       ? 'UNVERIFIABLE'
@@ -234,11 +269,12 @@ export async function buildReceipt(id: number): Promise<Receipt | null> {
     money: {
       realSolRaised,
       sumNets,
-      balances: sumNets === realSolRaised,
+      balances: sumNets === realSolRaised + flipPot,
       sessionsSettled: settled,
       deposits,
       potLamports,
       graduationTargetLamports: GRADUATION_LAMPORTS,
+      flipPot,
     },
     ordering: {
       replayVirtualSol: rep.endVs.toString(),

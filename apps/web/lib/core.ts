@@ -95,6 +95,31 @@ export function sellQuote(vs: bigint, vt: bigint, tokIn: bigint): bigint {
   return nvs >= vs ? 0n : vs - nvs;
 }
 
+/* ---- fairest mode, mirroring programs/magicpad/src/fair.rs ----------------
+ * Pure integer math so a receipt can replay taxed sells to the lamport:
+ * the tax depends only on (sol_out, weighted entry ts, clock), all of
+ * which the published trade log carries. */
+export const FLIP_TAX_START_BPS = 2_500n; // constants.rs: 25% on an instant flip
+export const FLIP_DECAY_SECS = 1_800n;    // constants.rs: fades to zero over 30 min
+export const BPS_DENOM = 10_000n;
+
+/** Tokens-weighted average entry timestamp after a buy (fair.rs semantics:
+ *  stamped BEFORE tokens_held moves, so `held` is the pre-buy balance). */
+export function weightedEntryTs(entry: bigint, held: bigint, now: bigint, bought: bigint): bigint {
+  const total = held + bought;
+  if (total === 0n) return entry;
+  return (entry * held + now * bought) / total;
+}
+
+/** Lamports of flip tax on `solOut` sold at `now` for a position whose
+ *  weighted entry is `entry`. Linear decay, rounds down, skew-safe. */
+export function flipTaxAt(solOut: bigint, entry: bigint, now: bigint): bigint {
+  const age = now > entry ? now - entry : 0n;
+  if (age >= FLIP_DECAY_SECS) return 0n;
+  const bps = FLIP_TAX_START_BPS * (FLIP_DECAY_SECS - age) / FLIP_DECAY_SECS;
+  return solOut * bps / BPS_DENOM;
+}
+
 // ---- the rollup: ask the router where a delegated account lives -----------
 const fqdnCache = new Map<string, { fqdn: string | null; at: number }>();
 export async function erEndpointFor(account: PublicKey): Promise<string | null> {
