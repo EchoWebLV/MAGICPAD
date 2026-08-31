@@ -27,12 +27,12 @@ import {
   useSignMessage, useSignTransaction, useWallets as usePrivySolanaWallets,
 } from '@privy-io/react-auth/solana';
 import type { WalletLike } from './wallet-tx';
+import { CLUSTER } from './core';
 
 export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? '';
 export const privyEnabled = PRIVY_APP_ID.length > 0;
 
-// the app is devnet-pinned (MagicBlock devnet router + devnet RPC)
-const CHAIN = 'solana:devnet' as const;
+const CHAIN = CLUSTER === 'mainnet' ? 'solana:mainnet' as const : 'solana:devnet' as const;
 
 export interface ActiveWallet extends WalletLike {
   source: 'privy' | 'adapter' | null;

@@ -44,12 +44,14 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <PrivyProvider
       appId={PRIVY_APP_ID}
       config={{
-        // email-only for now — wallet login returns when the connect flow is ready
-        loginMethods: ['email'],
+        loginMethods: ['email', 'wallet'],
         appearance: {
           theme: 'dark',
           accentColor: '#d4ff4a',
           walletChainType: 'solana-only',
+          // email first — the wallet rows sit under it. Wallet-first dead-ends
+          // in extensionless browsers ("You'll need a wallet to continue").
+          showWalletLoginFirst: false,
         },
         embeddedWallets: {
           solana: { createOnLogin: 'users-without-wallets' },
