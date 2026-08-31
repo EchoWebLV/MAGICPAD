@@ -11,12 +11,13 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PrivyProvider } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
-import { RPC_URL } from '../lib/magicpad';
+import { CLUSTER, RPC_URL } from '../lib/magicpad';
 import { PRIVY_APP_ID, privyEnabled } from '../lib/use-active-wallet';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
+const chainKey = CLUSTER === 'mainnet' ? 'solana:mainnet' as const : 'solana:devnet' as const;
 const solanaRpcs = privyEnabled ? {
-  'solana:devnet': {
+  [chainKey]: {
     rpc: createSolanaRpc(RPC_URL),
     rpcSubscriptions: createSolanaRpcSubscriptions(RPC_URL.replace(/^http/, 'ws')),
     blockExplorerUrl: 'https://explorer.solana.com',
@@ -43,17 +44,12 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <PrivyProvider
       appId={PRIVY_APP_ID}
       config={{
+        // email-only for now — wallet login returns when the connect flow is ready
+        loginMethods: ['email'],
         appearance: {
           theme: 'dark',
           accentColor: '#d4ff4a',
           walletChainType: 'solana-only',
-          showWalletLoginFirst: true,
-          walletList: [
-            'phantom',
-            'solflare',
-            'backpack',
-            'detected_solana_wallets',
-          ],
         },
         embeddedWallets: {
           solana: { createOnLogin: 'users-without-wallets' },

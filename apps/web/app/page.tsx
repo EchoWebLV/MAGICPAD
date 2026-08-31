@@ -20,7 +20,7 @@ export default function Landing() {
 
   useEffect(() => {
     let live = true;
-    fetchLaunches().then((d) => { if (live) setLaunches(d); }).catch(() => { /* next */ });
+    fetchLaunches().then((d) => { if (live) setLaunches(d); }).catch(() => { if (live) setLaunches([]); });
     return () => { live = false; };
   }, []);
 
@@ -74,8 +74,8 @@ export default function Landing() {
                     <span className="chip">${l.symbol}</span>
                   </div>
                   <div className="lp-prog">
-                    <i style={{ width: `${Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100)}%` }} />
-                    <span>{Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100).toFixed(0)}%</span>
+                    <i style={{ width: `${l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100)}%` }} />
+                    <span>{(l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100)).toFixed(0)}%</span>
                   </div>
                   <div className="lp-card-meta">
                     <div>

@@ -19,7 +19,11 @@ pub struct Launch {
     #[max_len(10)]
     pub symbol: String,
     pub created_ts: i64,
-    pub first_window_end_ts: i64, // leftover layout — no longer enforced
+    // Same slot the retired first_window_end_ts held — layout untouched so
+    // live bonding accounts keep deserializing. -1 = standard launch,
+    // >= 0 = fairest mode: accrued flip-tax lamports, drained with the
+    // raise at graduation into the Meteora seed.
+    pub flip_pot: i64,
     pub state: u8,            // 0 BONDING, 1 FROZEN, 2 RECONCILED, 3 GRADUATED
     pub virtual_sol: u64,     // virtual reserve, starts VIRTUAL_SOL_INIT
     pub virtual_tok: u64,     // virtual reserve, starts VIRTUAL_TOK_INIT
@@ -84,7 +88,10 @@ pub struct TradeSession {
     pub sol_proceeds: u64,   // ledger: gross SOL back from sells
     pub tokens_held: u64,    // ledger claim, becomes SPL at claim_tokens
     pub cost_basis: u64,     // lamports basis of tokens_held (avg cost)
-    pub realized_loss: u64,  // avg-cost loss ledger (rakeback retired; field stays for layout)
+    // Same slot the retired realized_loss held (rakeback is gone). Fairest
+    // mode: tokens-weighted entry timestamp of the open position, 0 = no
+    // position yet. Feeds the decaying flip tax on sells.
+    pub entry_ts: u64,
     pub reconciled: bool,
     pub tokens_claimed: bool,
     pub rakeback_claimed: bool, // leftover of the old claim flag — never written true now

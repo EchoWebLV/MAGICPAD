@@ -18,9 +18,10 @@ pub const TOKEN_TOTAL_SUPPLY: u64 = 1_000_000_000_000_000;
 pub const CURVE_TOKEN_ALLOC: u64 = 793_100_000_000_000;
 pub const VIRTUAL_SOL_INIT: u64 = 30_000_000_000;
 pub const VIRTUAL_TOK_INIT: u64 = 1_073_000_000_000_000;
-pub const GRADUATION_LAMPORTS: u64 = 5_000_000_000;
-pub const FIRST_WINDOW_SECS: i64 = 60; // leftover Launch field; not enforced
+pub const GRADUATION_LAMPORTS: u64 = 85_000_000_000; // mirrors constants.rs — tests scale amounts off this
 pub const MIN_DEPOSIT: u64 = 10_000_000;
+pub const FLIP_TAX_START_BPS: u64 = 2_500; // fairest mode: 25% on an instant flip
+pub const FLIP_DECAY_SECS: i64 = 1_800; // fades to zero over 30 minutes
 
 // launch states
 pub const BONDING: u8 = 0;
@@ -237,9 +238,25 @@ pub fn withdraw_platform_ix(admin: &Address, amount: u64) -> Instruction {
 pub struct CreateLaunchArgs {
     pub name: String,
     pub symbol: String,
+    pub fair: bool,
 }
 
 pub fn create_launch_ix(creator: &Address, id: u64, name: &str, symbol: &str) -> Instruction {
+    create_launch_ix_mode(creator, id, name, symbol, false)
+}
+
+/// fairest mode: creator opts the launch into the decaying flip tax.
+pub fn create_launch_fair_ix(creator: &Address, id: u64, name: &str, symbol: &str) -> Instruction {
+    create_launch_ix_mode(creator, id, name, symbol, true)
+}
+
+fn create_launch_ix_mode(
+    creator: &Address,
+    id: u64,
+    name: &str,
+    symbol: &str,
+    fair: bool,
+) -> Instruction {
     Instruction {
         program_id: program_id(),
         accounts: vec![
@@ -253,7 +270,7 @@ pub fn create_launch_ix(creator: &Address, id: u64, name: &str, symbol: &str) ->
         ],
         data: ix_data(
             "create_launch",
-            &CreateLaunchArgs { name: name.into(), symbol: symbol.into() },
+            &CreateLaunchArgs { name: name.into(), symbol: symbol.into(), fair },
         ),
     }
 }
@@ -517,7 +534,7 @@ pub struct LaunchMirror {
     pub name: String,
     pub symbol: String,
     pub created_ts: i64,
-    pub first_window_end_ts: i64,
+    pub flip_pot: i64, // -1 = standard; >= 0 = fairest mode's accrued tax
     pub state: u8,
     pub virtual_sol: u64,
     pub virtual_tok: u64,
@@ -546,7 +563,7 @@ pub struct SessionMirror {
     pub sol_proceeds: u64,
     pub tokens_held: u64,
     pub cost_basis: u64,
-    pub realized_loss: u64,
+    pub entry_ts: u64, // fairest: tokens-weighted entry stamp, 0 = no position
     pub reconciled: bool,
     pub tokens_claimed: bool,
     pub rakeback_claimed: bool,
@@ -631,7 +648,8 @@ pub fn setup_table(svm: &mut LiteSVM) -> Table {
         cranker: Keypair::new(),
     };
     for k in [&t.admin, &t.creator, &t.alice, &t.bob, &t.cranker] {
-        svm.airdrop(&k.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
+        // enough for the biggest graduation-relative deposit (7G/5) plus fees
+        svm.airdrop(&k.pubkey(), 2 * GRADUATION_LAMPORTS + 10 * LAMPORTS_PER_SOL).unwrap();
     }
     send(svm, &t.admin, &[], &[init_platform_ix(&t.admin.pubkey())]).unwrap();
     send(svm, &t.creator, &[], &[create_launch_ix(&t.creator.pubkey(), 0, "DARKPAD", "DARK")])
@@ -639,10 +657,11 @@ pub fn setup_table(svm: &mut LiteSVM) -> Table {
     t
 }
 
-/// clock jump kept so older tests stay stable; buys no longer need it
+/// clock jump kept so older tests stay stable; buys no longer need it.
+/// (used to chase the retired first_window_end_ts — now a plain +61s hop)
 pub fn warp_past_window(svm: &mut LiteSVM) {
-    let l = read_launch(svm, 0);
-    warp_to(svm, l.first_window_end_ts + 1);
+    let t = now(svm);
+    warp_to(svm, t + 61);
 }
 
 // ---------- the entry gate (UI-only door) ----------

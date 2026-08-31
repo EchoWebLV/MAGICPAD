@@ -19,7 +19,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import anchorPkg from '@coral-xyz/anchor';
 import {
-  Connection, Keypair, PublicKey, SystemProgram, Transaction, clusterApiUrl, LAMPORTS_PER_SOL,
+  ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction,
+  clusterApiUrl, LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID, NATIVE_MINT, getAccount, createBurnInstruction,
@@ -66,13 +67,22 @@ function writeRecord(data) {
   } catch { /* web public dir optional */ }
 }
 
-function lpSeed(l) {
+function lpSeed(l, raised) {
   // tokens that keep the pool at the frozen curve spot
-  const raised = l.realSolRaised;
   const vsol = l.virtualSol;
   const vtok = l.virtualTok;
   if (vsol.lten(0) || raised.lten(0)) return new BN(0);
   return raised.mul(vtok).div(vsol);
+}
+
+function flipPot(l) {
+  // fairest mode: accrued flip-tax lamports ride the same slot the retired
+  // first_window_end_ts used. Old-format launches carry exactly
+  // created_ts + 60 there — treat that fingerprint (or any negative) as no
+  // pot. Misreading a real pot as old-format only shrinks the seed (safe).
+  const p = l.flipPot ?? new BN(-1);
+  if (p.isNeg() || p.eq(l.createdTs.addn(60))) return new BN(0);
+  return p;
 }
 
 async function sendTx(conn, payer, tx, extra = []) {
@@ -84,6 +94,11 @@ async function sendTx(conn, payer, tx, extra = []) {
     await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
     return sig;
   }
+  // mainnet lesson (MCNFR burn expired unpriced): every legacy-built tx
+  // carries a CU price. Versioned txs come pre-compiled from the SDK.
+  tx.instructions.unshift(ComputeBudgetProgram.setComputeUnitPrice({
+    microLamports: Number(process.env.CU_PRICE || 50_000),
+  }));
   tx.feePayer = payer.publicKey;
   tx.recentBlockhash = blockhash;
   tx.partialSign(payer, ...extra);
@@ -120,12 +135,16 @@ export async function migrateLaunch({
     ?? (record[mintStr]?.pool ? new PublicKey(record[mintStr].pool) : null);
 
   const held = await getAccount(conn, adminAta).then((a) => new BN(a.amount.toString())).catch(() => new BN(0));
-  const want = lpSeed(l);
+  // flip pot joins the raise on BOTH sides so the pool opens deeper at the
+  // SAME frozen curve price — flippers fund the liquidity
+  const pot = flipPot(l);
+  const effRaised = l.realSolRaised.add(pot);
+  const want = lpSeed(l, effRaised);
   const seedTok = BN.min(want, held);
-  const seedSol = l.realSolRaised;
+  const seedSol = effRaised;
   const burnAmt = held.sub(seedTok);
 
-  log(`launch ${id} ${l.symbol}: seed ${sol(seedSol)} + ${seedTok.toString()} raw, burn ${burnAmt.toString()} leftover`);
+  log(`launch ${id} ${l.symbol}: seed ${sol(seedSol)}${pot.gtn(0) ? ` (incl ${sol(pot)} flip pot)` : ''} + ${seedTok.toString()} raw, burn ${burnAmt.toString()} leftover`);
 
   if (dry) return { pool: pool?.toBase58() ?? null, seedSol: seedSol.toString(), seedTok: seedTok.toString(), burn: burnAmt.toString() };
 
@@ -181,7 +200,7 @@ export async function migrateLaunch({
       activationType: ActivationType.Timestamp,
       tokenAProgram: TOKEN_PROGRAM_ID,
       tokenBProgram: TOKEN_PROGRAM_ID,
-      isLockLiquidity: true,
+      isLockLiquidity: process.env.LOCK_LP !== '0', // LOCK_LP=0 = withdrawable (canary only)
     });
     const sig = await sendTx(conn, payer, tx, [positionNft]);
     pool = created;

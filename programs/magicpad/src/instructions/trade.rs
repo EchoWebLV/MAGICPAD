@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 use crate::constants::*;
 use crate::curve;
 use crate::error::MagicPadError;
+use crate::fair;
 use crate::state::{Launch, TradeSession, LAUNCH_BONDING, LAUNCH_FROZEN};
 
 // ============================================================================
@@ -66,6 +67,15 @@ pub fn buy_handler(ctx: Context<TradeEr>, amount_in: u64) -> Result<()> {
             .ok_or(MagicPadError::Overflow)?;
     }
 
+    // Fairest mode: stamp the tokens-weighted entry time BEFORE tokens_held
+    // moves. A fresh position (or a re-entry after a full exit) starts at
+    // now; a big late buy drags the whole position's age toward now.
+    if l.flip_pot >= 0 {
+        let now = Clock::get()?.unix_timestamp as u64;
+        s.entry_ts = fair::weighted_entry_ts(s.entry_ts, s.tokens_held, now, out)
+            .ok_or(MagicPadError::Overflow)?;
+    }
+
     l.virtual_sol = l
         .virtual_sol
         .checked_add(amount_in)
@@ -122,13 +132,22 @@ pub fn sell_handler(ctx: Context<TradeEr>, tokens_in: u64) -> Result<()> {
     )
     .map_err(|_| MagicPadError::Overflow)?;
 
-    // avg-cost realized loss — kept on the session for layout; rakeback
-    // no longer pays out of it. A round trip at flat price is rounding dust.
-    if out < basis_slice {
-        s.realized_loss = s
-            .realized_loss
-            .checked_add(basis_slice - out)
-            .ok_or(MagicPadError::Overflow)?;
+    // Fairest mode: an early flip pays a tax that decays with the
+    // position's weighted age. Carved from the seller's ledger credit
+    // AFTER the quote — the curve math above never changes, so the
+    // determinism receipts stay valid. The tax accrues on the launch and
+    // ships with the raise to the Meteora seed: flippers fund the pool
+    // they tried to drain.
+    let mut tax = 0u64;
+    if l.flip_pot >= 0 {
+        let now = Clock::get()?.unix_timestamp;
+        tax = fair::flip_tax(out, s.entry_ts, now).ok_or(MagicPadError::Overflow)?;
+        if tax > 0 {
+            l.flip_pot = l
+                .flip_pot
+                .checked_add(i64::try_from(tax).map_err(|_| MagicPadError::Overflow)?)
+                .ok_or(MagicPadError::Overflow)?;
+        }
     }
 
     l.virtual_sol = l
@@ -150,9 +169,11 @@ pub fn sell_handler(ctx: Context<TradeEr>, tokens_in: u64) -> Result<()> {
         .checked_sub(tokens_in)
         .ok_or(MagicPadError::Overflow)?;
 
+    // seller is credited net of tax — reconcile's session→launch flow then
+    // moves the tax lamports into the pot through completely unchanged code
     s.sol_proceeds = s
         .sol_proceeds
-        .checked_add(out)
+        .checked_add(out.checked_sub(tax).ok_or(MagicPadError::Overflow)?)
         .ok_or(MagicPadError::Overflow)?;
     s.tokens_held = s
         .tokens_held

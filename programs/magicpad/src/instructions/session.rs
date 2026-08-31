@@ -102,7 +102,7 @@ pub fn open_trade_session_handler(
     s.sol_proceeds = 0;
     s.tokens_held = 0;
     s.cost_basis = 0;
-    s.realized_loss = 0;
+    s.entry_ts = 0;
     s.reconciled = false;
     s.tokens_claimed = false;
     s.rakeback_claimed = false;

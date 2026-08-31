@@ -8,7 +8,7 @@
 import { headers } from 'next/headers';
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { LAMPORTS, TOKEN_DECIMALS } from '../../../lib/core';
+import { CLUSTER, LAMPORTS, TOKEN_DECIMALS } from '../../../lib/core';
 import { resolveLaunchId } from '../../../lib/ledger';
 import { Receipt, buildReceipt } from '../../../lib/receipt';
 import './receipt.css';
@@ -20,8 +20,9 @@ const sol = (l: number, dp = 6) => (l / LAMPORTS).toFixed(dp);
 const tok = (raw: number) =>
   (raw / 10 ** TOKEN_DECIMALS).toLocaleString('en-US', { maximumFractionDigits: 6 });
 const short = (k: string) => `${k.slice(0, 4)}…${k.slice(-4)}`;
-const scanTx = (s: string) => `https://solscan.io/tx/${s}?cluster=devnet`;
-const scanAcct = (a: string) => `https://solscan.io/account/${a}?cluster=devnet`;
+const suffix = CLUSTER === 'mainnet' ? '' : `?cluster=${CLUSTER}`;
+const scanTx = (s: string) => `https://solscan.io/tx/${s}${suffix}`;
+const scanAcct = (a: string) => `https://solscan.io/account/${a}${suffix}`;
 const when = (ms: number) =>
   new Date(ms).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
 

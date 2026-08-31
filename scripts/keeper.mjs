@@ -39,7 +39,8 @@ const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
 const ATA_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const ROUTER = process.env.ROUTER_URL || 'https://devnet-router.magicblock.app';
 const POLL_MS = Number(process.env.POLL_MS || 15_000);
-const GRADUATION_LAMPORTS = new BN(5_000_000_000);
+// devnet demo default; mainnet ops pass GRADUATION_LAMPORTS=85000000000
+const GRADUATION_LAMPORTS = new BN(process.env.GRADUATION_LAMPORTS || '5000000000');
 const SESSION_DISC = Buffer.from(idl.accounts.find((a) => a.name === 'TradeSession').discriminator);
 const TOPUP_DISC = Buffer.from(idl.accounts.find((a) => a.name === 'TopUp').discriminator);
 const FROZEN = 1;

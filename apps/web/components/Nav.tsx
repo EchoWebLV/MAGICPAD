@@ -51,7 +51,7 @@ export default function Nav() {
     <div className="navwrap">
       <nav className="nav">
         <Link href="/" className="brand">
-          <Glyph n="spark" size={18} />
+          <Glyph n="moon" size={32} />
           mooner
         </Link>
         <div className="nav-links">

@@ -115,7 +115,9 @@ export default function Featured({ items, loading }: { items: LaunchView[]; load
     );
   }
 
-  const pct = Math.min(100, (cur.realSolRaised / GRADUATION_LAMPORTS) * 100);
+  // a graduated market is done regardless of what line it crossed under —
+  // the canaries graduated below today's threshold
+  const pct = cur.state === 3 ? 100 : Math.min(100, (cur.realSolRaised / GRADUATION_LAMPORTS) * 100);
   const desc = metas[cur.id]?.description?.trim();
   const chip = cur.state === 0
     ? (SHOW_DARK_CHIP

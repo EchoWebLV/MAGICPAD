@@ -15,7 +15,8 @@ import { quickBuy } from '../lib/trade-live';
 import { meteoraSwapTx } from '../lib/public-swap';
 import { sendWithWallet } from '../lib/wallet-tx';
 import {
-  GRADUATION_LAMPORTS, LAMPORTS, LaunchView, STATE, fetchLaunches, fmtAge, fmtSol, marketCapSol,
+  GRADUATION_LAMPORTS, LAMPORTS, LaunchView, STATE, fetchLaunches, fmtAge, fmtSol,
+  marketCapSol, maxCurveBuy,
 } from '../lib/magicpad';
 
 const HOUR = 3600;
@@ -73,7 +74,8 @@ function QuickBuy({ l, size }: { l: LaunchView; size: number }) {
         const tx = await meteoraSwapTx(l.mint, 'buy', String(lamports), wallet.publicKey.toBase58());
         await sendWithWallet(wallet, tx);
       } else {
-        await quickBuy(wallet, l.id, lamports);
+        // near the line the curve alloc runs out — clamp instead of revert
+        await quickBuy(wallet, l.id, Math.min(lamports, maxCurveBuy(l.virtualSol, l.virtualTok)));
       }
       setState('ok');
     } catch (err: any) {
@@ -101,7 +103,7 @@ function QuickBuy({ l, size }: { l: LaunchView; size: number }) {
 }
 
 function Row({ l, size }: { l: LaunchView; size: number }) {
-  const pct = Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100);
+  const pct = l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100);
   const meta = useLaunchMeta(l.id, l.creator);
   const chip = l.state === 0
     ? (SHOW_DARK_CHIP
@@ -165,7 +167,7 @@ export default function Board() {
   useEffect(() => {
     let live = true;
     const tick = async () => {
-      try { const data = await fetchLaunches(); if (live) setLaunches(data); } catch { /* next tick */ }
+      try { const data = await fetchLaunches(); if (live) setLaunches(data); } catch { if (live) setLaunches([]); }
     };
     tick();
     const t = setInterval(tick, 8000);

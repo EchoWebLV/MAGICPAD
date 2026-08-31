@@ -21,13 +21,13 @@ fn lock_mint_refuses_while_claims_outstanding() {
             &mut svm,
             who,
             &[],
-            &[open_trade_session_ix(&who.pubkey(), 0, &key.pubkey(), 3 * LAMPORTS_PER_SOL)],
+            &[open_trade_session_ix(&who.pubkey(), 0, &key.pubkey(), 3 * GRADUATION_LAMPORTS / 5)],
         )
         .unwrap();
     }
 
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 2_500_000_000)]).unwrap();
-    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix(&t.kb.pubkey(), &t.bob.pubkey(), 0, 2_600_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, GRADUATION_LAMPORTS / 2)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix(&t.kb.pubkey(), &t.bob.pubkey(), 0, GRADUATION_LAMPORTS / 2)]).unwrap();
     assert_eq!(read_launch(&svm, 0).state, FROZEN);
 
     send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 0)]).unwrap();
@@ -56,7 +56,7 @@ fn lock_mint_refuses_while_claims_outstanding() {
     assert_eq!(
         token_amount(&svm, &ata_address(&t.bob.pubkey(), &mint_pda(0))),
         bob_owed,
-        "bob receives the tokens he paid 2.6 SOL for",
+        "bob receives the tokens his crossing buy paid for",
     );
     assert_eq!(mint_supply(&svm, &mint_pda(0)), TOKEN_TOTAL_SUPPLY);
 

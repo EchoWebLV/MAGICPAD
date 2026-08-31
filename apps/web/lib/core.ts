@@ -7,10 +7,21 @@
 
 import { BN, utils } from '@coral-xyz/anchor';
 import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
-import idl from './idl.json';
+import idlDevnet from './idl.json';
+import idlMainnet from './idl-v3.json';
 
-export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || clusterApiUrl('devnet');
-export const ROUTER = process.env.NEXT_PUBLIC_ROUTER_URL || 'https://devnet-router.magicblock.app';
+/* One codebase, two deployments. The devnet demo program still speaks the
+ * old 2-arg create_launch, mainnet runs v3 (3-arg, fairest mode) — same
+ * program id on both nets, so the IDL is the only per-cluster choice. */
+export const CLUSTER = process.env.NEXT_PUBLIC_CLUSTER || 'mainnet';
+export const idl: any = CLUSTER === 'mainnet' ? idlMainnet : idlDevnet;
+
+export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL
+  || 'https://mainnet.helius-rpc.com/?api-key=3e7ced32-76bb-4def-926a-05f0ed38e528';
+export const PUBLIC_RPC_URL =
+  CLUSTER === 'mainnet' ? clusterApiUrl('mainnet-beta') : clusterApiUrl('devnet');
+export const ROUTER = process.env.NEXT_PUBLIC_ROUTER_URL
+  || (CLUSTER === 'mainnet' ? 'https://router.magicblock.app' : 'https://devnet-router.magicblock.app');
 export const PROGRAM_ID = new PublicKey((idl as any).address);
 export const DLP = new PublicKey('DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh');
 export const MAGIC_PROGRAM = new PublicKey('Magic11111111111111111111111111111111111111');
@@ -18,7 +29,8 @@ export const MAGIC_CONTEXT = new PublicKey('MagicContext111111111111111111111111
 export const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 
 export const LAMPORTS = 1_000_000_000;
-export const GRADUATION_LAMPORTS = 5 * LAMPORTS;
+export const GRADUATION_LAMPORTS =
+  Number(process.env.NEXT_PUBLIC_GRADUATION_LAMPORTS || 5 * LAMPORTS);
 export const TOKEN_DECIMALS = 6;
 export const TOKEN_TOTAL_SUPPLY = 1_000_000_000_000_000; // raw units
 export const MIN_DEPOSIT = 0.01 * LAMPORTS;
@@ -26,8 +38,20 @@ export const MIN_DEPOSIT = 0.01 * LAMPORTS;
 // a launch-tx dev buy quotes against EXACTLY these, so its fill is exact
 export const VIRTUAL_SOL_INIT = 30_000_000_000n;
 export const VIRTUAL_TOK_INIT = 1_073_000_000_000_000n;
+export const CURVE_TOKEN_ALLOC = 793_100_000_000_000n; // 79.31% sellable on curve
+
+/** Lamports the curve can still absorb before the token alloc is spent —
+ *  the program hard-rejects (BadQuote) a buy past it, so the UI clamps
+ *  instead of letting the tx revert. Mirrors trade.rs:58. */
+export function maxCurveBuy(vs: bigint, vt: bigint): number {
+  const cap = (vs * vt) / (VIRTUAL_TOK_INIT - CURVE_TOKEN_ALLOC) - vs - 1n;
+  return cap < 0n ? 0 : Number(cap);
+}
 
 export const connection = new Connection(RPC_URL, {
+  commitment: 'confirmed', disableRetryOnRateLimit: true,
+});
+export const publicConnection = new Connection(PUBLIC_RPC_URL, {
   commitment: 'confirmed', disableRetryOnRateLimit: true,
 });
 
@@ -92,7 +116,9 @@ export async function erEndpointFor(account: PublicKey): Promise<string | null> 
  * node keeps a settled market's ledger long after it routes home — so a
  * receipt for a finished launch still has somewhere to read its trades. */
 export const ER_NODES = (process.env.NEXT_PUBLIC_ER_NODES
-  || 'https://devnet-as.magicblock.app,https://devnet.magicblock.app')
+  || (CLUSTER === 'mainnet'
+    ? 'https://eu.magicblock.app'
+    : 'https://devnet-as.magicblock.app,https://devnet.magicblock.app'))
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 /** Every endpoint worth asking for an account's rollup history: whoever the

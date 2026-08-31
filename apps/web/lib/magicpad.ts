@@ -1,30 +1,33 @@
 'use client';
 
-/* The chain rail, client-side and read-frugal (stakehouse rules): one
- * getProgramAccounts sweep per poll window, 2.5s memo, fail-fast on 429s.
- * A launch lives in one of two places — home under the program, or DARK
- * under the delegation program while it bonds inside the ER. The L1 copy
- * of a dark launch is a stale pre-delegation snapshot, so live curve
- * numbers come from the ER node the router points at. */
+/* The chain rail, client-side and read-frugal (stakehouse rules): walk
+ * launch PDAs from platform.seq — never getProgramAccounts. GPA on the
+ * delegation program is a 429 on any shared RPC (it hosts every program's
+ * delegated accounts), and a failed sweep used to leave the board on
+ * "loading" forever. A launch lives in one of two places — home under the
+ * program, or DARK under the delegation program while it bonds inside the
+ * ER. The L1 copy of a dark launch is a stale pre-delegation snapshot, so
+ * live curve numbers come from the ER node the router points at. */
 
 import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
-import { PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import {
-  CONFIG, DLP, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, GATE, LAMPORTS,
-  PLATFORM, PROGRAM_ID, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, connection,
-  erConnection, erEndpointFor, launchFilter, launchPda, mintPda,
+  CLUSTER, CONFIG, DLP, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, GATE, LAMPORTS,
+  PLATFORM, PROGRAM_ID, PUBLIC_RPC_URL, RPC_URL, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY,
+  connection, erConnection, erEndpointFor, idl, launchPda, mintPda,
+  publicConnection,
 } from './core';
-import idl from './idl.json';
 
 /* Constants, PDAs, curve math and the connection factories live in
  * ./core so server code (the receipt route) can use them without
  * crossing this file's client boundary. Re-exported here unchanged. */
 export {
-  RPC_URL, ROUTER, PROGRAM_ID, DLP, MAGIC_PROGRAM, MAGIC_CONTEXT, TOKEN_PROGRAM,
+  CLUSTER, RPC_URL, PUBLIC_RPC_URL, ROUTER, PROGRAM_ID, DLP, MAGIC_PROGRAM, MAGIC_CONTEXT, TOKEN_PROGRAM,
   LAMPORTS, GRADUATION_LAMPORTS, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, MIN_DEPOSIT,
-  VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, connection, PLATFORM, CONFIG, GATE,
-  ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, launchPda, mintPda, sessionPda,
-  topupPda, poolRecordPda, buyQuote, sellQuote, erEndpointFor, erConnection,
+  VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, CURVE_TOKEN_ALLOC, maxCurveBuy, connection,
+  publicConnection, PLATFORM, CONFIG, GATE, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, launchPda,
+  mintPda, sessionPda, topupPda, poolRecordPda, buyQuote, sellQuote, erEndpointFor,
+  erConnection,
 } from './core';
 
 // read-only program — tx building + decode only, never signs
@@ -136,49 +139,61 @@ function toView(id: number, l: any, dark: boolean): LaunchView {
   };
 }
 
-// ---- fetchLaunches: dual sweep + live ER overlay, 2.5s memo ----------------
+// ---- fetchLaunches: platform.seq walk + live ER overlay, 6s memo ----------
 
 let memo: { at: number; data: LaunchView[] } | null = null;
 let inflight: Promise<LaunchView[]> | null = null;
+
+async function sweepLaunches(conn: Connection): Promise<LaunchView[]> {
+  const plat = await conn.getAccountInfo(PLATFORM);
+  if (!plat) return [];
+  const seq = (program.coder.accounts.decode('platform', plat.data).launchSeq as BN).toNumber();
+  if (seq <= 0) return [];
+  const keys = Array.from({ length: seq }, (_, i) => launchPda(i));
+  const accs: Awaited<ReturnType<Connection['getMultipleAccountsInfo']>> = [];
+  for (let i = 0; i < keys.length; i += 100) {
+    accs.push(...await conn.getMultipleAccountsInfo(keys.slice(i, i + 100)));
+  }
+  const overlays = accs.map(async (account, i) => {
+    if (!account) return null;
+    const dark = account.owner.equals(DLP);
+    if (!dark && !account.owner.equals(PROGRAM_ID)) return null;
+    let stale: ReturnType<typeof decodeLaunch>;
+    try { stale = decodeLaunch(account.data); } catch { return null; }
+    const id = (stale.id as BN).toNumber();
+    const pubkey = keys[i];
+    if (!launchPda(id).equals(pubkey)) return null;
+    let view = toView(id, stale, dark);
+    if (!dark) return view;
+    const fqdn = await erEndpointFor(pubkey);
+    if (fqdn) {
+      try {
+        const live = await erConnection(fqdn).getAccountInfo(pubkey, 'confirmed');
+        if (live) view = toView(id, decodeLaunch(live.data), true);
+      } catch { /* keep the stale snapshot — better than a blank row */ }
+    }
+    return view;
+  });
+  const views: LaunchView[] = [];
+  for (const v of await Promise.all(overlays)) if (v) views.push(v);
+  views.sort((a, b) => b.id - a.id);
+  return views;
+}
 
 export async function fetchLaunches(): Promise<LaunchView[]> {
   if (memo && Date.now() - memo.at < 6000) return memo.data;
   if (inflight) return inflight;
   inflight = (async () => {
-    const [home, dark] = await Promise.all([
-      connection.getProgramAccounts(PROGRAM_ID, { filters: launchFilter }),
-      connection.getProgramAccounts(DLP, { filters: launchFilter }),
-    ]);
-    const views: LaunchView[] = [];
-    for (const { account } of home) {
-      const l = decodeLaunch(account.data);
-      views.push(toView((l.id as BN).toNumber(), l, false));
+    try {
+      return await sweepLaunches(connection);
+    } catch {
+      if (RPC_URL === PUBLIC_RPC_URL) throw new Error('rpc');
+      return await sweepLaunches(publicConnection);
     }
-    // dark launches: the delegation program hosts EVERY program's delegated
-    // accounts, and anchor discriminators hash only the account name — a
-    // foreign "Launch" collides. Identity is the PDA, not the discriminator.
-    for (const { pubkey, account } of dark) {
-      let stale: any, id: number;
-      try {
-        stale = decodeLaunch(account.data);
-        id = (stale.id as BN).toNumber();
-      } catch { continue; }
-      if (!launchPda(id).equals(pubkey)) continue;
-      // L1 data is the stale pre-delegation snapshot — overlay the live ER copy
-      let view = toView(id, stale, true);
-      const fqdn = await erEndpointFor(pubkey);
-      if (fqdn) {
-        try {
-          const live = await erConnection(fqdn).getAccountInfo(pubkey, 'confirmed');
-          if (live) view = toView(id, decodeLaunch(live.data), true);
-        } catch { /* keep the stale snapshot — better than a blank row */ }
-      }
-      views.push(view);
-    }
-    views.sort((a, b) => b.id - a.id);
+  })().then((views) => {
     memo = { at: Date.now(), data: views };
     return views;
-  })();
+  });
   // clear the latch on settle either way — a failed sweep must not wedge the
   // board. The finally-derived promise re-throws the rejection, so absorb it:
   // callers handle the ORIGINAL promise; the derived one is bookkeeping only.
@@ -194,8 +209,9 @@ export function marketCapSol(l: LaunchView): number {
 }
 
 // ---- display helpers -------------------------------------------------------
-export const solscanAccount = (addr: string) => `https://solscan.io/account/${addr}?cluster=devnet`;
-export const solscanTx = (sig: string) => `https://solscan.io/tx/${sig}?cluster=devnet`;
+const clusterSuffix = CLUSTER === 'mainnet' ? '' : `?cluster=${CLUSTER}`;
+export const solscanAccount = (addr: string) => `https://solscan.io/account/${addr}${clusterSuffix}`;
+export const solscanTx = (sig: string) => `https://solscan.io/tx/${sig}${clusterSuffix}`;
 
 export const fmtSol = (lamports: number, dp = 3) => (lamports / LAMPORTS).toFixed(dp);
 export const fmtTok = (raw: number | bigint) =>

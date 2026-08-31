@@ -23,6 +23,7 @@ import { BUY_PRESETS, DEFAULT_BUY, readBuyPreset, writeBuyPreset } from '../../.
 import {
   GRADUATION_LAMPORTS, LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
   TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fetchLaunches, fmtAge, fmtSol, fmtTok,
+  maxCurveBuy,
   launchIdFromPath, marketCapSol, sellQuote, short, solscanAccount, solscanTx,
 } from '../../../lib/magicpad';
 import { HistRow, fetchHistory } from '../../../lib/history';
@@ -265,7 +266,12 @@ export default function LaunchPage() {
   const avail = pos ? pos.deposit + pos.solProceeds - pos.solSpent : 0;
   const net = pos ? pos.solProceeds - pos.solSpent : 0;
 
-  const buyLamports = Math.round((Number.parseFloat(buyIn) || 0) * LAMPORTS);
+  // the curve hard-rejects a buy past its token alloc (BadQuote) — clamp
+  // the input like the sell side clamps to tokens held
+  const curveRoom = onPool ? Infinity : maxCurveBuy(l.virtualSol, l.virtualTok);
+  const buyLamports = Math.min(
+    Math.round((Number.parseFloat(buyIn) || 0) * LAMPORTS), curveRoom,
+  );
   const buyOut = onPool
     ? (side === 'buy' && poolQuote ? BigInt(poolQuote.amountOut) : 0n)
     : (buyLamports > 0 ? buyQuote(l.virtualSol, l.virtualTok, BigInt(buyLamports)) : 0n);
@@ -445,7 +451,7 @@ export default function LaunchPage() {
               <button onClick={copyMint} aria-label="copy mint" title={l.mint}>
                 <Glyph n="copy" size={12} />
               </button>
-              <a href={`https://solscan.io/token/${l.mint}?cluster=devnet`} target="_blank" rel="noreferrer"
+              <a href={solscanAccount(l.mint).replace('/account/', '/token/')} target="_blank" rel="noreferrer"
                 aria-label="mint on solscan" title={l.mint}>
                 <Glyph n="out" size={12} />
               </a>

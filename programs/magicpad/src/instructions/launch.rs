@@ -44,6 +44,7 @@ pub fn create_launch_handler(
     ctx: Context<CreateLaunch>,
     name: String,
     symbol: String,
+    fair: bool,
 ) -> Result<()> {
     require!(
         !name.is_empty() && name.len() <= 32,
@@ -77,9 +78,9 @@ pub fn create_launch_handler(
     l.name = name;
     l.symbol = symbol;
     l.created_ts = now;
-    l.first_window_end_ts = now
-        .checked_add(FIRST_WINDOW_SECS)
-        .ok_or(MagicPadError::Overflow)?;
+    // fairest launch: arm the flip pot (early flips pay a decaying tax
+    // into it, and it ships with the raise to the Meteora seed). -1 = off.
+    l.flip_pot = if fair { 0 } else { -1 };
     l.state = LAUNCH_BONDING;
     l.virtual_sol = VIRTUAL_SOL_INIT;
     l.virtual_tok = VIRTUAL_TOK_INIT;

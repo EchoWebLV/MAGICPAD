@@ -202,7 +202,7 @@ pub struct Graduate<'info> {
 }
 
 pub fn graduate_handler(ctx: Context<Graduate>) -> Result<()> {
-    let (raised, lp_tokens) = {
+    let (raised, flip_pot, lp_tokens) = {
         let l = &ctx.accounts.launch;
         let settled = l.state == LAUNCH_RECONCILED
             || (l.state == LAUNCH_FROZEN && l.sessions_reconciled == l.sessions_opened);
@@ -214,7 +214,10 @@ pub fn graduate_handler(ctx: Context<Graduate>) -> Result<()> {
         let lp = TOKEN_TOTAL_SUPPLY
             .checked_sub(l.tokens_sold)
             .ok_or(MagicPadError::Overflow)?;
-        (l.real_sol_raised, lp)
+        // fairest mode's accrued flip tax leaves with the raise — it exists
+        // to fatten the Meteora seed, not to sit in a dead PDA
+        let pot = if l.flip_pot > 0 { l.flip_pot as u64 } else { 0 };
+        (l.real_sol_raised, pot, lp)
     };
 
     // SOL side: admin pre-pays tax to the platform via system transfer
@@ -225,10 +228,13 @@ pub fn graduate_handler(ctx: Context<Graduate>) -> Result<()> {
         raised as u128 * ctx.accounts.config.launch_tax_bps as u128 / BPS_DENOM as u128,
     )
     .map_err(|_| MagicPadError::Overflow)?;
+    // sweep = raise + flip pot; platform tax applies to the raise only —
+    // the pot is pool-bound seed money and passes through untaxed
+    let sweep = raised.checked_add(flip_pot).ok_or(MagicPadError::Overflow)?;
     let launch_ai = ctx.accounts.launch.to_account_info();
     let rent_min = Rent::get()?.minimum_balance(launch_ai.data_len());
     require!(
-        launch_ai.lamports() >= rent_min.checked_add(raised).ok_or(MagicPadError::Overflow)?,
+        launch_ai.lamports() >= rent_min.checked_add(sweep).ok_or(MagicPadError::Overflow)?,
         MagicPadError::PotNotReady
     );
     if tax > 0 {
@@ -243,8 +249,8 @@ pub fn graduate_handler(ctx: Context<Graduate>) -> Result<()> {
             tax,
         )?;
     }
-    **launch_ai.try_borrow_mut_lamports()? -= raised;
-    **ctx.accounts.admin.to_account_info().try_borrow_mut_lamports()? += raised;
+    **launch_ai.try_borrow_mut_lamports()? -= sweep;
+    **ctx.accounts.admin.to_account_info().try_borrow_mut_lamports()? += sweep;
 
     // token side: everything the curve didn't sell seeds the pool
     if lp_tokens > 0 {

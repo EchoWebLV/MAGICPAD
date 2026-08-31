@@ -19,8 +19,8 @@ import { BN } from '@coral-xyz/anchor';
 import { useActiveWallet } from '../../lib/use-active-wallet';
 import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import {
-  CONFIG, DLP, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, PLATFORM, PROGRAM_ID,
-  TOKEN_PROGRAM, VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT,
+  CLUSTER, CONFIG, DLP, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, PLATFORM,
+  PROGRAM_ID, TOKEN_PROGRAM, VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT,
   buyQuote, fetchFees, fmtSol, fmtTok, launchPda, mintPda, program, sessionPda,
 } from '../../lib/magicpad';
 import { metaMemoIx, pinAssets, squashImage } from '../../lib/metadata';
@@ -63,6 +63,8 @@ export default function Create() {
   const [msg, setMsg] = useState('');
   const [fee, setFee] = useState(0);
   const [taxBps, setTaxBps] = useState(0);
+  const [fairest, setFairest] = useState(false);
+  const [fairInfo, setFairInfo] = useState(false);
 
   const refreshBal = useCallback(() => {
     if (!publicKey) { setBal(null); return; }
@@ -77,7 +79,7 @@ export default function Create() {
   const dv = devBuy.trim() === '' ? 0 : Number(devBuy);
   const overCurve = Number.isFinite(dv) && dv > 0 && dv > DEV_BUY_MAX;
   const devOk = dv === 0 || (Number.isFinite(dv) && dv >= DEV_BUY_MIN && dv <= DEV_BUY_MAX);
-  const devLamports = devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
+  const devLamports = !fairest && devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
   // the creator is the first buy by construction — this quote IS the fill
   const alloc = devLamports > 0
     ? buyQuote(VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, BigInt(devLamports)) : 0n;
@@ -109,8 +111,13 @@ export default function Create() {
       const platform = await (program.account as any).platform.fetch(PLATFORM);
       const id = platform.launchSeq.toNumber();
       const launch = launchPda(id);
+      // v3 (mainnet) takes the fairest flag on-chain; the devnet demo
+      // program still speaks the 2-arg shape
+      const createArgs: unknown[] = CLUSTER === 'mainnet'
+        ? [name.trim(), symbol.trim().toUpperCase(), fairest]
+        : [name.trim(), symbol.trim().toUpperCase()];
       const tx = new Transaction().add(
-        await program.methods.createLaunch(name.trim(), symbol.trim().toUpperCase()).accountsPartial({
+        await (program.methods as any).createLaunch(...createArgs).accountsPartial({
           creator: publicKey, platform: PLATFORM, config: CONFIG, launch, mint: mintPda(id),
           tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
         }).instruction(),
@@ -198,13 +205,14 @@ export default function Create() {
         <div className="field">
           <label>buy at launch (◎) — any size</label>
           <div className="presets" style={{ margin: '0 0 8px' }}>
-            <button type="button" className={`preset${dv === 0 ? ' on' : ''}`} onClick={() => setDevBuy('')}>
+            <button type="button" disabled={fairest} className={`preset${dv === 0 ? ' on' : ''}`} onClick={() => setDevBuy('')}>
               none
             </button>
             {DEV_BUY_PRESETS.map((n) => (
               <button
                 key={n}
                 type="button"
+                disabled={fairest}
                 className={`preset${dv === n ? ' on' : ''}`}
                 onClick={() => setDevBuy(String(n))}
               >
@@ -214,7 +222,7 @@ export default function Create() {
           </div>
           <input
             value={devBuy} onChange={(e) => setDevBuy(e.target.value)}
-            placeholder="0.25, 1, 2.5…" inputMode="decimal"
+            placeholder="0.25, 1, 2.5…" inputMode="decimal" disabled={fairest}
           />
           {devLamports > 0 && (
             <p className="note" style={{ marginTop: 6 }}>
@@ -233,6 +241,40 @@ export default function Create() {
               under {fmtSol(GRADUATION_LAMPORTS)}◎ — that size fills the curve and freezes
               the market in the same tx, before it can go dark
             </p>
+          )}
+        </div>
+        <div className="field">
+          <div className="fairrow">
+            <label className="faircheck">
+              <input
+                type="checkbox" checked={fairest}
+                onChange={(e) => { setFairest(e.target.checked); if (e.target.checked) setDevBuy(''); }}
+              />
+              <span>fairest launch</span>
+            </label>
+            <button
+              type="button" className="infoi" aria-label="what is fairest launch"
+              onClick={() => setFairInfo((v) => !v)}
+            >i</button>
+          </div>
+          {fairest && (
+            <p className="note" style={{ marginTop: 6 }}>
+              your first buy is off — you enter through the same gate as everyone else
+            </p>
+          )}
+          {fairInfo && (
+            <div className="fairbox">
+              <p><span className="fb-k">every market here</span> already launches dark: entry is
+                gated, so bots and bundlers never get in. all trading happens inside the ephemeral
+                rollup — there is nothing on L1 to snipe. the graduation pool opens at a 2% fee
+                that fades to 0.25%, so flipping the fresh pool costs real money. LP locked, mint
+                revoked, metadata frozen.</p>
+              <p><span className="fb-k">fairest adds</span>: you give up the creator first-buy. no
+                pre-allocation, no head start — the curve is born untouched, and anyone can verify
+                on-chain that you started with zero.</p>
+              <p className="fb-soon">soon: an early-flip tax that fades to zero and pays into the
+                pool — scalpers fund the liquidity they tried to drain.</p>
+            </div>
           )}
         </div>
         <div className="field">

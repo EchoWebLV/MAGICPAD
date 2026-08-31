@@ -858,3 +858,36 @@ a.kv:hover .k { color: var(--y); }
   .lp-banner .btn { margin-left: 0; }
 }
 
+
+/* ---- fairest launch checkbox + info ---- */
+.fairrow { display: flex; align-items: center; gap: 8px; }
+.field label.faircheck {
+  display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer;
+  font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--paper);
+}
+.field .faircheck input {
+  appearance: none; width: 16px; height: 16px; margin: 0; flex: none;
+  border: 1px solid var(--line-2); border-radius: 4px; background: var(--ink-3); cursor: pointer;
+  display: grid; place-items: center; transition: background 0.12s, border-color 0.12s;
+}
+.field .faircheck input:checked { background: var(--y); border-color: var(--y); }
+.field .faircheck input:checked::after {
+  content: ''; width: 9px; height: 5px; margin-top: -2px;
+  border-left: 2px solid var(--ink); border-bottom: 2px solid var(--ink); transform: rotate(-45deg);
+}
+.faircheck span { user-select: none; }
+.infoi {
+  width: 16px; height: 16px; flex: none; padding: 0; border-radius: 50%;
+  border: 1px solid var(--line-2); background: transparent; color: var(--dim);
+  font-size: 10px; font-weight: 700; font-style: italic; line-height: 1; cursor: pointer;
+}
+.infoi:hover { color: var(--y); border-color: var(--y-deep); }
+.fairbox {
+  margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line);
+  border-left: 2px solid var(--y); border-radius: var(--r-sm); background: var(--ink-3);
+}
+.fairbox p { margin: 0 0 8px; font-size: 12px; line-height: 1.55; color: var(--dim); }
+.fairbox p:last-child { margin-bottom: 0; }
+.fb-k { color: var(--paper); font-weight: 600; }
+.fb-soon { color: var(--faint); font-style: italic; }
+.preset:disabled, .field input:disabled { opacity: 0.4; cursor: default; }

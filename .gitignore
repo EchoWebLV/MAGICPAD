@@ -15,6 +15,9 @@ apps/web/public/migrations.json
 
 # entry-gate co-signer — server-only secret
 gate.json
+
+# mainnet canary run artifacts — RPC keys inline, local only
+scripts/mainnet-canary/
 .grok-artifacts/
 
 # local dev-server config for the preview pane

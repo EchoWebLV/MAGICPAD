@@ -48,7 +48,7 @@ fn create_launch_takes_fee_and_makes_mint() {
     assert_eq!(l.real_sol_raised, 0);
     assert_eq!(l.creator, creator.pubkey().to_bytes());
     assert_eq!(l.mint, mint_pda(0).to_bytes());
-    assert_eq!(l.first_window_end_ts, l.created_ts + FIRST_WINDOW_SECS);
+    assert_eq!(l.flip_pot, -1, "standard launch: fairest mode off");
 
     // dark bonding: the mint exists, supply ZERO, authority = platform PDA
     assert_eq!(mint_supply(&svm, &mint_pda(0)), 0, "no supply until claims");
@@ -81,33 +81,39 @@ fn full_lifecycle_two_traders() {
     warp_past_window(&mut svm);
 
     // one L1 approval each: escrow the bankroll, pin the session key
+    // (amounts are graduation-relative: same 3/5 · 1/2 · 13/25 ratios the
+    // suite ran at the old 5 SOL line, exact at 85e9 too)
+    let dep = 3 * GRADUATION_LAMPORTS / 5;
     send(
         &mut svm,
         &t.alice,
         &[],
-        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 3 * LAMPORTS_PER_SOL)],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), dep)],
     )
     .unwrap();
     send(
         &mut svm,
         &t.bob,
         &[],
-        &[open_trade_session_ix(&t.bob.pubkey(), 0, &t.kb.pubkey(), 3 * LAMPORTS_PER_SOL)],
+        &[open_trade_session_ix(&t.bob.pubkey(), 0, &t.kb.pubkey(), dep)],
     )
     .unwrap();
     // escrow really landed in the session PDAs
     let s_alice = session_pda(0, &t.alice.pubkey());
-    assert!(lamports(&svm, &s_alice) > 3 * LAMPORTS_PER_SOL, "deposit escrowed");
+    assert!(lamports(&svm, &s_alice) > dep, "deposit escrowed");
 
     // gasless lane: the session KEYS sign, the cranker pays fees
-    let a_buy = 2_500_000_000u64;
-    let b_buy = 2_600_000_000u64; // the crossing buy: 2.5 + 2.6 >= 5 SOL
+    // the line sits at the curve-alloc edge (~0.005 SOL slack), so the
+    // crossing buy lands cumulative raise exactly ON it — anything fatter
+    // trips the BadQuote alloc guard, by design
+    let a_buy = GRADUATION_LAMPORTS / 2;
+    let b_buy = GRADUATION_LAMPORTS - a_buy; // the crossing buy: lands exactly on G
     let l0 = read_launch(&svm, 0);
     let a_expected = buy_quote(l0.virtual_sol, l0.virtual_tok, a_buy);
     send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, a_buy)])
         .unwrap();
     let l1 = read_launch(&svm, 0);
-    assert_eq!(l1.state, BONDING, "2.5 SOL does not graduate yet");
+    assert_eq!(l1.state, BONDING, "half the line does not graduate yet");
     let b_expected = buy_quote(l1.virtual_sol, l1.virtual_tok, b_buy);
     send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix(&t.kb.pubkey(), &t.bob.pubkey(), 0, b_buy)])
         .unwrap();
@@ -139,12 +145,12 @@ fn full_lifecycle_two_traders() {
     );
     assert_eq!(
         lamports(&svm, &t.alice.pubkey()) - alice_before,
-        3 * LAMPORTS_PER_SOL - a_buy,
+        dep - a_buy,
         "alice refund = deposit - net, to the lamport"
     );
     assert_eq!(
         lamports(&svm, &t.bob.pubkey()) - bob_before,
-        3 * LAMPORTS_PER_SOL - b_buy,
+        dep - b_buy,
         "bob refund = deposit - net, to the lamport"
     );
     let l = read_launch(&svm, 0);
@@ -230,7 +236,7 @@ fn full_lifecycle_two_traders() {
 }
 
 #[test]
-fn sell_realizes_loss_and_fizzle_settles() {
+fn sell_conservation_and_fizzle_settles() {
     let mut svm = fresh_svm();
     let t = setup_table(&mut svm);
     warp_past_window(&mut svm);
@@ -256,8 +262,10 @@ fn sell_realizes_loss_and_fizzle_settles() {
 
     let sa = read_session(&svm, 0, &t.alice.pubkey());
     let sb = read_session(&svm, 0, &t.bob.pubkey());
-    assert!(sa.realized_loss > 10_000_000, "alice took a real loss, got {}", sa.realized_loss);
-    assert_eq!(sb.realized_loss, 0, "bob sold at profit — no loss ledger");
+    // standard launch: the fair-mode ledger never wakes up — no entry
+    // stamp, no tax carved from either seller (fair.rs covers fairest mode)
+    assert_eq!(sa.entry_ts, 0, "standard launch never stamps an entry");
+    assert_eq!(sb.entry_ts, 0, "standard launch never stamps an entry");
     assert!(sb.sol_proceeds > sb.sol_spent, "bob is a net winner");
 
     // conservation with sells: Σ signed nets == real_sol_raised
@@ -408,12 +416,12 @@ fn no_trades_after_freeze() {
             &mut svm,
             who,
             &[],
-            &[open_trade_session_ix(&who.pubkey(), 0, &key.pubkey(), 3 * LAMPORTS_PER_SOL)],
+            &[open_trade_session_ix(&who.pubkey(), 0, &key.pubkey(), 3 * GRADUATION_LAMPORTS / 5)],
         )
         .unwrap();
     }
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 2_500_000_000)]).unwrap();
-    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix(&t.kb.pubkey(), &t.bob.pubkey(), 0, 2_600_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, GRADUATION_LAMPORTS / 2)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix(&t.kb.pubkey(), &t.bob.pubkey(), 0, GRADUATION_LAMPORTS / 2)]).unwrap();
     assert_eq!(read_launch(&svm, 0).state, FROZEN);
 
     // the market is frozen for EVERYTHING: buys, sells, late sessions

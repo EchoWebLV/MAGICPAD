@@ -9,6 +9,8 @@ const ui = Plus_Jakarta_Sans({
 });
 const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['400', '500', '700'], variable: '--font-mono' });
 
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: 'Mooner',
   description: 'Launch your token in minutes. Bond in the dark, graduate in the light.',

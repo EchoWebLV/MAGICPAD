@@ -31,7 +31,7 @@ import {
 const { AnchorProvider, Program, Wallet, BN } = anchorPkg;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const idl = JSON.parse(fs.readFileSync(path.join(root, 'target/idl/magicpad.json'), 'utf8'));
+const idl = JSON.parse(fs.readFileSync(path.join(root, 'scripts/idl-demo.json'), 'utf8'));
 const PROGRAM_ID = new PublicKey(idl.address);
 const DLP = new PublicKey('DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh');
 const MAGIC_PROGRAM = new PublicKey('Magic11111111111111111111111111111111111111');

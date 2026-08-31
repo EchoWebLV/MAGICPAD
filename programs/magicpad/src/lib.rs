@@ -4,6 +4,7 @@ use ephemeral_rollups_sdk::anchor::ephemeral;
 pub mod constants;
 pub mod curve;
 pub mod error;
+pub mod fair;
 pub mod instructions;
 pub mod state;
 
@@ -56,9 +57,25 @@ pub mod magicpad {
         set_gate_handler(ctx, new_key)
     }
 
+    /// Attach the Metaplex face (name/symbol from the launch account, URI to
+    /// the pinned JSON). Admin-only; works until lock_mint revokes authority.
+    pub fn set_token_metadata(
+        ctx: Context<SetTokenMetadata>,
+        id: u64,
+        uri: String,
+        is_mutable: bool,
+    ) -> Result<()> {
+        set_token_metadata_handler(ctx, id, uri, is_mutable)
+    }
+
     // -- launch lifecycle (L1) --
-    pub fn create_launch(ctx: Context<CreateLaunch>, name: String, symbol: String) -> Result<()> {
-        create_launch_handler(ctx, name, symbol)
+    pub fn create_launch(
+        ctx: Context<CreateLaunch>,
+        name: String,
+        symbol: String,
+        fair: bool,
+    ) -> Result<()> {
+        create_launch_handler(ctx, name, symbol, fair)
     }
 
     pub fn delegate_launch(ctx: Context<DelegateLaunch>, launch_id: u64) -> Result<()> {

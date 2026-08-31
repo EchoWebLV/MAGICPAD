@@ -77,14 +77,14 @@ fn launch_tax_splits_raised_at_graduate() {
         &mut svm,
         &t.alice,
         &[],
-        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 6 * LAMPORTS_PER_SOL)],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 6 * GRADUATION_LAMPORTS / 5)],
     )
     .unwrap();
     send(
         &mut svm,
         &t.cranker,
         &[&t.ka],
-        &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 5 * LAMPORTS_PER_SOL)],
+        &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, GRADUATION_LAMPORTS)],
     )
     .unwrap();
     assert_eq!(read_launch(&svm, 0).state, FROZEN);
