@@ -77,12 +77,23 @@ pub const PUMP_FEE_PROGRAM: Pubkey = pubkey!("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchM
 | `buy` (existing) | ER | session key | Gains `pump: Option<Account<PumpLaunch>>`. Threshold = `PUMP_GRADUATION_LAMPORTS` when `Some`, else `GRADUATION_LAMPORTS`. Nothing else changes. The ER clones the non-delegated PDA read-only (Platform precedent in `freeze_launch`). |
 | `set_pump_mint(mint)` | L1 | admin | Once. Requires `launch.state ∈ {FROZEN, RECONCILED}`, `pump_mint == default`, and pump `bonding_curve` (`["bonding-curve", mint]` under pump) deserialises with `creator == launch.creator` and `complete == false`. Stores `pump_mint`. |
 | `pump_claim` | L1 | anyone (cranker) | Replaces `claim_tokens` for pump launches. See flow below. |
-| `pump_graduate` | L1 | admin | Requires every traded session claimed (`claims_done == sessions_reconciled` and `state ∈ {FROZEN, RECONCILED}` with `sessions_reconciled == sessions_opened`). Flip pot + pot dust → launch vault → pump `buy` → `burn` the received tokens (skip when pot < a 0.01 SOL floor: rent would eat it; sweep to platform instead). Revokes the Mooner mint authority (supply is 0). `state = GRADUATED`. |
+| `pump_graduate` | L1 | admin | Requires every traded session claimed or bookkept (`claims_done == sessions_reconciled`, `sessions_reconciled == sessions_opened`, `state ∈ {FROZEN, RECONCILED}`). Flip pot + pot dust → launch vault → pump `buy` → `burn` the received tokens (skip when pot < a 0.01 SOL floor: rent would eat it; sweep to platform instead). Revokes the Mooner mint authority (supply is 0). `state = GRADUATED`. |
 
-`claim_tokens`, `graduate`, `lock_mint`, `record_pool` **refuse** when the
-PumpLaunch PDA exists (they take it as an optional account and error
-`PumpMode`), so the Meteora path can never run on a pump launch and vice
-versa (`pump_claim`/`pump_graduate` require the PDA).
+`claim_tokens` and `graduate` (the two instructions that mint the Mooner
+supply) gain a **required** `pump: UncheckedAccount` constrained to the
+`["pump", launch_id]` address and `require!(pump.data_is_empty())` → error
+`PumpMode`. An optional account would be no guard at all (omit it and the
+Mooner mint gets minted on a pump launch). `lock_mint` needs no guard (supply is
+0, it fails on its own check); `record_pool` is harmless. Callers of
+`claim_tokens`/`graduate` (`keeper.mjs`, `migrate.mjs`, `fill-graduate.mjs`,
+web `claimTokens`, the canary scripts' pinned IDLs) add the one address.
+`pump_claim`/`pump_graduate` require the PDA to exist.
+
+`buy`'s `pump` account stays *optional* (`None` for standard launches — passing
+a non-existent L1 address into the ER is untested, and standard launches must
+not depend on it). A session-key holder who omits it on a pump launch only makes
+the market keep bonding past 1 SOL; the UI always passes it, the gate keeps
+sessions UI-born, and `freeze_launch` is the admin recovery.
 
 ### `pump_claim` flow
 
@@ -97,7 +108,10 @@ user_volume_accumulator, fee_config, fee_program), token/ata/system programs.
 
 Args: `max_sol_cost: u64` (from the crank's live quote; bounded below).
 
-1. `require!(session.reconciled && !session.tokens_claimed && session.tokens_held > 0)`.
+1. `require!(session.reconciled && !session.tokens_claimed)`. If
+   `tokens_held == 0` (a session that fully exited during bonding): mark
+   `tokens_claimed`, `claims_done += 1`, return — no vault, no CPI. This is what
+   lets `pump_graduate`'s `claims_done == sessions_reconciled` gate close.
 2. `amount = tokens_held * (10_000 - PUMP_HAIRCUT_BPS) / 10_000`.
 3. `require!(max_sol_cost <= pot_available)` where `pot_available = launch.lamports - rent_min - flip_pot` (the flip pot is reserved for `pump_graduate`).
 4. Lamports `launch → vault`: `max_sol_cost + RENT_ALLOWANCE` (ATA rent 2_039_280 + user_volume_accumulator rent; the exact accumulator size is read in the spike and hard-coded as a constant).
