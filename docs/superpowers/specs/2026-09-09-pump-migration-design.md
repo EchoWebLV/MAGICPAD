@@ -35,7 +35,8 @@ signed by a unique PDA, never via a transfer or airdrop.
   `buyback_fee_recipient`(W), one of eight fixed addresses hard-coded in the SDK.
   Omit either → error 6062 `BuybackFeeRecipientMissing`. Data = discriminator
   `[102,6,61,18,1,218,235,234]` ‖ `amount: u64 LE` ‖ `max_sol_cost: u64 LE` ‖ `0x01`
-  (`track_volume = Some(true)`, 25 bytes). `buy` CPIs the fee program
+  (`track_volume`: the IDL's `OptionBool` is a one-byte newtype, not a two-byte
+  `Option<bool>`; 25 bytes total). `buy` CPIs the fee program
   (`GetFees`), so a local SVM needs **both** ELFs.
 - **`associated_user` may be owned by a wallet other than `user`** (mainnet sim
   `err: null`): the PDA vault pays, the tokens land straight in the trader's own

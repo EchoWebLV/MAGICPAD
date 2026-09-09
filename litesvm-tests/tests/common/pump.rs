@@ -260,7 +260,7 @@ pub fn pump_buy_ix(
     let mut data = vec![102u8, 6, 61, 18, 1, 218, 235, 234];
     data.extend_from_slice(&amount.to_le_bytes());
     data.extend_from_slice(&max_sol_cost.to_le_bytes());
-    data.push(1); // track_volume = Some(true)
+    data.push(1); // track_volume: pump's OptionBool is a one-byte newtype, not a two-byte Option<bool>
     Instruction {
         program_id: pump_id(),
         accounts: vec![
