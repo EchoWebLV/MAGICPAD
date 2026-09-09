@@ -279,6 +279,28 @@
               }
             ]
           }
+        },
+        {
+          "name": "pump",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -342,6 +364,27 @@
                   110,
                   99,
                   104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112
                 ]
               },
               {
@@ -1367,6 +1410,85 @@
       ]
     },
     {
+      "name": "enable_pump",
+      "discriminator": [
+        33,
+        78,
+        244,
+        65,
+        204,
+        17,
+        184,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "launch",
+          "docs": [
+            "`Account<>` on purpose: the owner check IS the \"before delegate_launch\"",
+            "guard. Once delegated the launch is DLP-owned and this instruction is",
+            "permanently unreachable (no undelegate path while BONDING), so the",
+            "create tx must bundle enable_pump ahead of delegate_launch."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "launch_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "launch_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "launch_id",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "freeze_launch",
       "discriminator": [
         13,
@@ -1501,6 +1623,27 @@
                   110,
                   99,
                   104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112
                 ]
               },
               {
@@ -1941,6 +2084,455 @@
           "type": {
             "vec": "bytes"
           }
+        }
+      ]
+    },
+    {
+      "name": "pump_claim",
+      "discriminator": [
+        222,
+        213,
+        144,
+        40,
+        234,
+        105,
+        53,
+        219
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "platform",
+          "docs": [
+            "The crank is deliberately NOT permissionless: `amount` is chosen by",
+            "the caller, so a stranger could hand a holder one token and burn the",
+            "single claim the session gets. Read only for the admin check."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "trader"
+        },
+        {
+          "name": "launch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "session",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "session.launch_id",
+                "account": "TradeSession"
+              },
+              {
+                "kind": "account",
+                "path": "session.trader",
+                "account": "TradeSession"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              },
+              {
+                "kind": "account",
+                "path": "session.trader",
+                "account": "TradeSession"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump_mint"
+        },
+        {
+          "name": "trader_ata",
+          "writable": true
+        },
+        {
+          "name": "pump_global"
+        },
+        {
+          "name": "pump_fee_recipient",
+          "writable": true
+        },
+        {
+          "name": "pump_bonding_curve",
+          "writable": true
+        },
+        {
+          "name": "pump_associated_bonding_curve",
+          "writable": true
+        },
+        {
+          "name": "pump_creator_vault",
+          "writable": true
+        },
+        {
+          "name": "pump_event_authority"
+        },
+        {
+          "name": "pump_program",
+          "address": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+        },
+        {
+          "name": "pump_global_volume_accumulator"
+        },
+        {
+          "name": "pump_user_volume_accumulator",
+          "writable": true
+        },
+        {
+          "name": "pump_fee_config"
+        },
+        {
+          "name": "pump_fee_program",
+          "address": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
+        },
+        {
+          "name": "pump_bonding_curve_v2"
+        },
+        {
+          "name": "pump_buyback_fee_recipient",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "max_sol_cost",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "pump_graduate",
+      "discriminator": [
+        135,
+        106,
+        255,
+        110,
+        145,
+        174,
+        111,
+        80
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "platform",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "the Mooner mint — authority revoked at the end, supply stays 0"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_ata",
+          "writable": true
+        },
+        {
+          "name": "pump_mint",
+          "writable": true
+        },
+        {
+          "name": "pump_global"
+        },
+        {
+          "name": "pump_fee_recipient",
+          "writable": true
+        },
+        {
+          "name": "pump_bonding_curve",
+          "writable": true
+        },
+        {
+          "name": "pump_associated_bonding_curve",
+          "writable": true
+        },
+        {
+          "name": "pump_creator_vault",
+          "writable": true
+        },
+        {
+          "name": "pump_event_authority"
+        },
+        {
+          "name": "pump_program",
+          "address": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+        },
+        {
+          "name": "pump_global_volume_accumulator"
+        },
+        {
+          "name": "pump_user_volume_accumulator",
+          "writable": true
+        },
+        {
+          "name": "pump_fee_config"
+        },
+        {
+          "name": "pump_fee_program",
+          "address": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
+        },
+        {
+          "name": "pump_bonding_curve_v2"
+        },
+        {
+          "name": "pump_buyback_fee_recipient",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "max_sol_cost",
+          "type": "u64"
         }
       ]
     },
@@ -2421,6 +3013,101 @@
       ]
     },
     {
+      "name": "set_pump_mint",
+      "discriminator": [
+        7,
+        160,
+        227,
+        63,
+        10,
+        54,
+        83,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "platform",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch",
+          "docs": [
+            "Typed `Account<>` on purpose: the owner check means the launch must be",
+            "home (`commit_launch` undelegated it) before the admin can pin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  117,
+                  110,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  117,
+                  109,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch.id",
+                "account": "Launch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pump_mint"
+        },
+        {
+          "name": "pump_bonding_curve"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "set_token_metadata",
       "docs": [
         "Attach the Metaplex face (name/symbol from the launch account, URI to",
@@ -2803,6 +3490,19 @@
       ]
     },
     {
+      "name": "PumpLaunch",
+      "discriminator": [
+        142,
+        51,
+        20,
+        70,
+        67,
+        122,
+        52,
+        220
+      ]
+    },
+    {
       "name": "TopUp",
       "discriminator": [
         148,
@@ -2949,6 +3649,56 @@
       "code": 6023,
       "name": "GateRequired",
       "msg": "entry is gated — the platform co-signature is missing"
+    },
+    {
+      "code": 6024,
+      "name": "PumpMode",
+      "msg": "this launch graduates on pump.fun — use pump_claim / pump_graduate"
+    },
+    {
+      "code": 6025,
+      "name": "PumpMintNotSet",
+      "msg": "pump mint not set yet"
+    },
+    {
+      "code": 6026,
+      "name": "PumpMintAlreadySet",
+      "msg": "pump mint already set"
+    },
+    {
+      "code": 6027,
+      "name": "WrongPumpMint",
+      "msg": "pump mint does not match this launch"
+    },
+    {
+      "code": 6028,
+      "name": "PumpClaimsOutstanding",
+      "msg": "pump claims still outstanding"
+    },
+    {
+      "code": 6029,
+      "name": "PotTooSmall",
+      "msg": "launch pot cannot cover this pump buy"
+    },
+    {
+      "code": 6030,
+      "name": "ClaimTooLarge",
+      "msg": "claim exceeds the session's share"
+    },
+    {
+      "code": 6031,
+      "name": "BadPumpAccount",
+      "msg": "pump-side account is not the one this launch expects"
+    },
+    {
+      "code": 6032,
+      "name": "PumpTooLate",
+      "msg": "pump mode must be enabled before the first trade"
+    },
+    {
+      "code": 6033,
+      "name": "LaunchNotReconciled",
+      "msg": "launch not reconciled yet — every session settles before claims"
     }
   ],
   "types": [
@@ -3092,6 +3842,30 @@
           {
             "name": "launch_tax_bps",
             "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PumpLaunch",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "launch_id",
+            "type": "u64"
+          },
+          {
+            "name": "pump_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "claims_done",
+            "type": "u64"
           },
           {
             "name": "bump",

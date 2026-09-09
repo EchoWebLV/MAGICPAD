@@ -6,7 +6,7 @@
  * paint until the trader's own session has caught up. */
 
 import { HistRow } from './history';
-import { GRADUATION_LAMPORTS, MIN_DEPOSIT } from './magicpad';
+import { MIN_DEPOSIT, graduationFor } from './magicpad';
 import { PositionView } from './trade-live';
 
 export const emptyPos = (): PositionView => ({
@@ -21,6 +21,7 @@ export interface CurveSnap {
   tokensSold: number;
   sessionsOpened: number;
   state: number;
+  pump: boolean;
 }
 
 export interface PaintPending {
@@ -51,7 +52,7 @@ export function bumpBuy<T extends CurveSnap>(
       realSolRaised: raised,
       tokensSold: live.tokensSold + Number(tokOut),
       sessionsOpened: live.sessionsOpened + (first ? 1 : 0),
-      state: raised >= GRADUATION_LAMPORTS ? 1 : live.state,
+      state: raised >= graduationFor(live) ? 1 : live.state,
     },
     pos: {
       ...(pos ?? emptyPos()),

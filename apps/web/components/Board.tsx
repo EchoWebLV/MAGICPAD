@@ -15,8 +15,8 @@ import { quickBuy } from '../lib/trade-live';
 import { meteoraSwapTx } from '../lib/public-swap';
 import { sendWithWallet } from '../lib/wallet-tx';
 import {
-  GRADUATION_LAMPORTS, LAMPORTS, LaunchView, STATE, fetchLaunches, fmtAge, fmtSol,
-  marketCapSol, maxCurveBuy,
+  LAMPORTS, LaunchView, STATE, fetchLaunches, fmtAge, fmtSol,
+  graduationFor, marketCapSol, maxCurveBuy,
 } from '../lib/magicpad';
 
 const HOUR = 3600;
@@ -58,7 +58,7 @@ function QuickBuy({ l, size }: { l: LaunchView; size: number }) {
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<'' | 'ok' | 'no'>('');
   const [msg, setMsg] = useState('');
-  const tradable = (l.state === 0 && l.dark) || l.state === 3;
+  const tradable = (l.state === 0 && l.dark) || (l.state === 3 && !l.pump);
 
   const fire = async (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -103,14 +103,14 @@ function QuickBuy({ l, size }: { l: LaunchView; size: number }) {
 }
 
 function Row({ l, size }: { l: LaunchView; size: number }) {
-  const pct = l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100);
+  const pct = l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / graduationFor(l)) * 100);
   const meta = useLaunchMeta(l.id, l.creator);
   const chip = l.state === 0
     ? (SHOW_DARK_CHIP
       ? (l.dark ? <span className="chip dark">DARK</span> : <span className="chip">BONDING</span>)
       : null)
     : l.state === 3
-      ? <span className="chip grad">GRADUATED</span>
+      ? <span className="chip grad">{l.pump ? 'PUMP.FUN' : 'GRADUATED'}</span>
       : <span className="chip frozen">{STATE[l.state]}</span>;
   return (
     <div className="row">
@@ -122,6 +122,7 @@ function Row({ l, size }: { l: LaunchView; size: number }) {
             <span className="name">{l.name}</span>
             <span className="sym mono">${l.symbol}</span>
             {chip}
+            {l.pump && l.state < 3 && <span className="chip">1◎ → PUMP</span>}
             <span className="age mono">{fmtAge(l.createdTs)}</span>
           </div>
           <div className="stats mono">
@@ -178,7 +179,7 @@ export default function Board() {
   const all = useMemo(() => launches ?? [], [launches]);
   const now = Math.floor(Date.now() / 1000);
   const bonding = all.filter((l) => l.state === 0);
-  const stretch = bonding.filter((l) => l.realSolRaised >= 0.6 * GRADUATION_LAMPORTS);
+  const stretch = bonding.filter((l) => l.realSolRaised >= 0.6 * graduationFor(l));
   const fresh = bonding.filter((l) => !stretch.includes(l) && now - l.createdTs < HOUR);
   const lingering = bonding.filter((l) => !stretch.includes(l) && !fresh.includes(l));
   const migrated = all.filter((l) => l.state >= 1);

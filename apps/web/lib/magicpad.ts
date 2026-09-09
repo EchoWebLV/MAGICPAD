@@ -12,10 +12,10 @@
 import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
-  CLUSTER, CONFIG, DLP, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, GATE, LAMPORTS,
-  PLATFORM, PROGRAM_ID, PUBLIC_RPC_URL, RPC_URL, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY,
+  CLUSTER, CONFIG, DLP, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, GATE, GRADUATION_LAMPORTS, LAMPORTS,
+  PLATFORM, PROGRAM_ID, PUBLIC_RPC_URL, PUMP_GRADUATION_LAMPORTS, RPC_URL, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY,
   connection, erConnection, erEndpointFor, idl, launchPda, mintPda,
-  publicConnection,
+  publicConnection, pumpPda,
 } from './core';
 
 /* Constants, PDAs, curve math and the connection factories live in
@@ -27,7 +27,7 @@ export {
   VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, CURVE_TOKEN_ALLOC, maxCurveBuy, connection,
   publicConnection, PLATFORM, CONFIG, GATE, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, launchPda,
   mintPda, sessionPda, topupPda, poolRecordPda, pumpPda, buyQuote, sellQuote, erEndpointFor,
-  erConnection,
+  erConnection, PUMP_GRADUATION_LAMPORTS, pumpUrl,
 } from './core';
 
 // read-only program — tx building + decode only, never signs
@@ -98,6 +98,7 @@ export async function fetchGateKey(): Promise<PublicKey | null> {
 export const decodeLaunch = (d: Buffer) => program.coder.accounts.decode('launch', d);
 export const decodeSession = (d: Buffer) => program.coder.accounts.decode('tradeSession', d);
 export const decodeTopUp = (d: Buffer) => program.coder.accounts.decode('topUp', d);
+export const decodePumpLaunch = (d: Buffer) => program.coder.accounts.decode('pumpLaunch', d);
 export const TOPUP_DISCRIMINATOR = Buffer.from(
   (idl as any).accounts.find((a: any) => a.name === 'TopUp').discriminator as number[],
 );
@@ -119,9 +120,11 @@ export interface LaunchView {
   tokensSold: number;     // raw units
   sessionsOpened: number;
   mint: string;
+  pump: boolean;          // graduates on pump.fun at 1 SOL
+  pumpMint: string | null; // the pump.fun CA once set_pump_mint ran
 }
 
-function toView(id: number, l: any, dark: boolean): LaunchView {
+function toView(id: number, l: any, dark: boolean, pump: { pumpMint: PublicKey } | null): LaunchView {
   return {
     id,
     creator: (l.creator as PublicKey).toBase58(),
@@ -136,8 +139,14 @@ function toView(id: number, l: any, dark: boolean): LaunchView {
     tokensSold: (l.tokensSold as BN).toNumber(),
     sessionsOpened: (l.sessionsOpened as BN).toNumber(),
     mint: (l.mint as PublicKey).toBase58(),
+    pump: pump !== null,
+    pumpMint: pump && !pump.pumpMint.equals(PublicKey.default) ? pump.pumpMint.toBase58() : null,
   };
 }
+
+/** The line a launch freezes at: 1 SOL for pump.fun launches, the env line otherwise. */
+export const graduationFor = (l: { pump: boolean }): number =>
+  l.pump ? PUMP_GRADUATION_LAMPORTS : GRADUATION_LAMPORTS;
 
 // ---- fetchLaunches: platform.seq walk + live ER overlay, 6s memo ----------
 
@@ -154,6 +163,15 @@ async function sweepLaunches(conn: Connection): Promise<LaunchView[]> {
   for (let i = 0; i < keys.length; i += 100) {
     accs.push(...await conn.getMultipleAccountsInfo(keys.slice(i, i + 100)));
   }
+  // the pump markers live on L1 and are never delegated — one more sweep
+  const pumpKeys = Array.from({ length: seq }, (_, i) => pumpPda(i));
+  const pumps: ({ pumpMint: PublicKey } | null)[] = [];
+  for (let i = 0; i < pumpKeys.length; i += 100) {
+    for (const a of await conn.getMultipleAccountsInfo(pumpKeys.slice(i, i + 100))) {
+      if (!a || !a.owner.equals(PROGRAM_ID)) { pumps.push(null); continue; }
+      try { pumps.push({ pumpMint: decodePumpLaunch(a.data).pumpMint as PublicKey }); } catch { pumps.push(null); }
+    }
+  }
   const overlays = accs.map(async (account, i) => {
     if (!account) return null;
     const dark = account.owner.equals(DLP);
@@ -163,13 +181,13 @@ async function sweepLaunches(conn: Connection): Promise<LaunchView[]> {
     const id = (stale.id as BN).toNumber();
     const pubkey = keys[i];
     if (!launchPda(id).equals(pubkey)) return null;
-    let view = toView(id, stale, dark);
+    let view = toView(id, stale, dark, pumps[i]);
     if (!dark) return view;
     const fqdn = await erEndpointFor(pubkey);
     if (fqdn) {
       try {
         const live = await erConnection(fqdn).getAccountInfo(pubkey, 'confirmed');
-        if (live) view = toView(id, decodeLaunch(live.data), true);
+        if (live) view = toView(id, decodeLaunch(live.data), true, pumps[i]);
       } catch { /* keep the stale snapshot — better than a blank row */ }
     }
     return view;

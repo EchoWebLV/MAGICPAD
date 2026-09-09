@@ -21,9 +21,9 @@ import {
 } from '../../../lib/metadata';
 import { BUY_PRESETS, DEFAULT_BUY, readBuyPreset, writeBuyPreset } from '../../../lib/buy-size';
 import {
-  GRADUATION_LAMPORTS, LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
+  LAMPORTS, LaunchView, MIN_DEPOSIT, STATE,
   TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, buyQuote, fetchLaunches, fmtAge, fmtSol, fmtTok,
-  maxCurveBuy,
+  graduationFor, maxCurveBuy, pumpUrl,
   launchIdFromPath, marketCapSol, sellQuote, short, solscanAccount, solscanTx,
 } from '../../../lib/magicpad';
 import { HistRow, fetchHistory } from '../../../lib/history';
@@ -34,7 +34,7 @@ import {
 import { replayMcap } from '../../../lib/replay';
 import { getSolUsd } from '../../../lib/usd';
 import {
-  PositionView, claimTokens, quickBuy, readLaunchLive, readPosition, sellLive,
+  PositionView, PumpView, claimTokens, quickBuy, readLaunchLive, readPosition, readPumpLaunch, sellLive,
 } from '../../../lib/trade-live';
 import { sendWithWallet, splBalance, walletBalance } from '../../../lib/wallet-tx';
 import {
@@ -47,8 +47,9 @@ interface Live {
   creator: string; name: string; symbol: string; state: number; dark: boolean; createdTs: number;
   virtualSol: bigint; virtualTok: bigint; realSolRaised: number; tokensSold: number;
   sessionsOpened: number; mint: string;
+  pump: boolean; pumpMint: string | null;
 }
-const toLive = (l: any, dark: boolean): Live => ({
+const toLive = (l: any, dark: boolean, pump: PumpView | null): Live => ({
   creator: l.creator.toBase58(), name: l.name, symbol: l.symbol, state: l.state, dark,
   createdTs: l.createdTs.toNumber(),
   virtualSol: BigInt(l.virtualSol.toString()),
@@ -57,6 +58,8 @@ const toLive = (l: any, dark: boolean): Live => ({
   tokensSold: l.tokensSold.toNumber(),
   sessionsOpened: l.sessionsOpened.toNumber(),
   mint: l.mint.toBase58(),
+  pump: pump !== null,
+  pumpMint: pump?.pumpMint ?? null,
 });
 
 export default function LaunchPage() {
@@ -137,19 +140,20 @@ export default function LaunchPage() {
 
   const refresh = useCallback(async () => {
     if (id === null) return;
-    const [r, p, h] = await Promise.all([
+    const [r, p, h, pv] = await Promise.all([
       readLaunchLive(id).catch(() => null),
       // undefined = the read FAILED this tick (ER hiccup); null = the chain
       // positively says no session. Only the latter may clear the panel.
       publicKey ? readPosition(publicKey, id).catch(() => undefined) : Promise.resolve(null),
       fetchHistory(id).catch(() => null),
+      readPumpLaunch(id).catch(() => null),
     ]);
     const hold = pendingRef.current;
     const caught = !hold || posCaughtUp(p, hold.pos);
     // a fill we just painted must not lose to a stale ER read — hold the
     // curve and the position until this trader's session has moved, not
     // until a clock runs out
-    if (r && caught) setLive(toLive(r.l, r.dark));
+    if (r && caught) setLive(toLive(r.l, r.dark, pv));
     else if (r === null && live === null) setGone(true);
     if (p !== undefined && caught) setPos(p);
     if (h) {
@@ -196,7 +200,7 @@ export default function LaunchPage() {
     fetchLaunches().then((ls) => setOthers(ls.filter((x) => x.id !== id))).catch(() => { /* panel hides */ });
   }, [id]);
 
-  const publicMint = live?.state === 3 ? live.mint : null;
+  const publicMint = live?.state === 3 && !live.pump ? live.mint : null;
   useEffect(() => {
     if (!publicMint || !publicKey) { setSpl(0n); return; }
     let on = true;
@@ -254,8 +258,8 @@ export default function LaunchPage() {
   if (id === null || !live) return <main className="wrap"><p className="empty">loading market…</p></main>;
 
   const l = live;
-  const onPool = l.state === 3;
-  const pct = onPool ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100);
+  const onPool = l.state === 3 && !l.pump;
+  const pct = l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / graduationFor(l)) * 100);
   const mc = onPool && poolSpot ? poolSpot.mcSol : mcNow;
   const spotPerTok = onPool && poolSpot
     ? poolSpot.solPerToken * LAMPORTS
@@ -334,7 +338,8 @@ export default function LaunchPage() {
     ? (SHOW_DARK_CHIP
       ? (l.dark ? <span className="chip dark">DARK</span> : <span className="chip">BONDING</span>)
       : null)
-    : l.state === 3 ? <span className="chip grad">GRADUATED</span>
+    : l.state === 3
+      ? <span className="chip grad">{l.pump ? 'PUMP.FUN' : 'GRADUATED'}</span>
       : <span className="chip frozen">{STATE[l.state]}</span>;
 
   const mcUsd = solUsd ? mc * solUsd : null;
@@ -434,7 +439,7 @@ export default function LaunchPage() {
               <b>{mcLabel}</b>
               <em>
                 {l.state === 3
-                  ? `${mc.toFixed(2)}◎ · graduated`
+                  ? `${mc.toFixed(2)}◎ · ${l.pump ? 'live on pump.fun' : 'graduated'}`
                   : `${mc.toFixed(2)}◎ · ${pct.toFixed(1)}% to graduate`}
               </em>
             </div>
@@ -459,6 +464,12 @@ export default function LaunchPage() {
                 <a href={meteoraPoolUrl(poolSpot.pool)} target="_blank" rel="noreferrer"
                   aria-label="meteora pool" title={poolSpot.pool} className="faint">
                   pool
+                </a>
+              )}
+              {l.pump && l.pumpMint && (
+                <a href={pumpUrl(l.pumpMint)} target="_blank" rel="noreferrer"
+                  aria-label="pump.fun" title={l.pumpMint} className="faint">
+                  pump.fun
                 </a>
               )}
               {/* the dark curve's audit trail, published once it stops */}
@@ -608,6 +619,12 @@ export default function LaunchPage() {
                 Live on Meteora. Same buy and sell, your wallet signs the swap.
               </p>
             )}
+            {l.pump && l.state >= 1 && (
+              <p className="note" style={{ marginTop: 0 }}>
+                graduates on pump.fun — the migration buys your share straight into your wallet.
+                nothing to claim here{l.pumpMint ? '; trade it on pump.fun' : ''}.
+              </p>
+            )}
             <div className="sides">
               <button className={side === 'buy' ? 'on buy' : ''} onClick={() => setSide('buy')}>Buy</button>
               <button className={side === 'sell' ? 'on sell' : ''} onClick={() => setSide('sell')}>Sell</button>
@@ -723,7 +740,7 @@ export default function LaunchPage() {
               </>
             )}
 
-            {pos && pos.reconciled && !pos.tokensClaimed && pos.tokensHeld > 0n && (
+            {pos && pos.reconciled && !pos.tokensClaimed && pos.tokensHeld > 0n && !l.pump && (
               <button
                 className="btn"
                 style={{ width: '100%', marginBottom: 10 }}
@@ -782,7 +799,7 @@ export default function LaunchPage() {
             </div>
             <div className="athrow">
               <span>MC {mc.toFixed(1)}◎</span>
-              <span>{l.state === 3 ? 'graduated' : `grad ${fmtSol(GRADUATION_LAMPORTS, 0)}◎`}</span>
+              <span>{l.state === 3 ? (l.pump ? 'on pump.fun' : 'graduated') : `grad ${fmtSol(graduationFor(l), 0)}◎`}</span>
             </div>
             <div className={`bar${pct >= 60 ? ' hot' : ''}`} style={{ marginTop: 6 }}>
               <i style={{ width: `${pct}%` }} />

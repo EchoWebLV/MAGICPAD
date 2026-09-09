@@ -16,7 +16,7 @@ import TokenArt from './TokenArt';
 import { SHOW_DARK_CHIP } from '../lib/flags';
 import { LaunchMeta, resolveMeta } from '../lib/metadata';
 import {
-  GRADUATION_LAMPORTS, LaunchView, STATE, fmtAge, fmtSol, marketCapSol,
+  LaunchView, STATE, fmtAge, fmtSol, graduationFor, marketCapSol,
 } from '../lib/magicpad';
 
 const DWELL = 7000;   // ms per slide
@@ -117,14 +117,14 @@ export default function Featured({ items, loading }: { items: LaunchView[]; load
 
   // a graduated market is done regardless of what line it crossed under —
   // the canaries graduated below today's threshold
-  const pct = cur.state === 3 ? 100 : Math.min(100, (cur.realSolRaised / GRADUATION_LAMPORTS) * 100);
+  const pct = cur.state === 3 ? 100 : Math.min(100, (cur.realSolRaised / graduationFor(cur)) * 100);
   const desc = metas[cur.id]?.description?.trim();
   const chip = cur.state === 0
     ? (SHOW_DARK_CHIP
       ? (cur.dark ? <span className="chip dark">DARK</span> : <span className="chip">BONDING</span>)
       : null)
     : cur.state === 3
-      ? <span className="chip grad">GRADUATED</span>
+      ? <span className="chip grad">{cur.pump ? 'PUMP.FUN' : 'GRADUATED'}</span>
       : <span className="chip frozen">{STATE[cur.state]}</span>;
 
   return (

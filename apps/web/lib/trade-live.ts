@@ -19,7 +19,7 @@ import {
 } from '@solana/web3.js';
 import {
   CLUSTER, DLP, MIN_DEPOSIT, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, TOPUP_DISCRIMINATOR,
-  TOPUP_SPACE, connection, decodeLaunch, decodeSession, decodeTopUp, erConnection,
+  TOPUP_SPACE, connection, decodeLaunch, decodePumpLaunch, decodeSession, decodeTopUp, erConnection,
   erEndpointFor, fetchGateKey, launchPda, mintPda, program, pumpPda, sessionPda, topupPda,
 } from './magicpad';
 import { WalletLike, notifyActivity, sendWithWallet } from './wallet-tx';
@@ -469,10 +469,43 @@ async function sendHealing(
   }
 }
 
+// whether a launch carries the pump marker — immutable once trading starts,
+// so one L1 read per launch per page life is enough
+const pumpFlag = new Map<number, Promise<boolean>>();
+export function isPumpLaunch(id: number): Promise<boolean> {
+  let p = pumpFlag.get(id);
+  if (!p) {
+    p = connection.getAccountInfo(pumpPda(id)).then((a) => !!a).catch(() => { pumpFlag.delete(id); return false; });
+    pumpFlag.set(id, p);
+  }
+  return p;
+}
+
+export interface PumpView { pumpMint: string | null; claimsDone: number }
+
+/** The pump marker's contents, or null for a Meteora launch. */
+export async function readPumpLaunch(id: number): Promise<PumpView | null> {
+  const a = await connection.getAccountInfo(pumpPda(id));
+  if (!a) return null;
+  const d = decodePumpLaunch(a.data);
+  const pumpMint = d.pumpMint as PublicKey;
+  return {
+    pumpMint: pumpMint.equals(PublicKey.default) ? null : pumpMint.toBase58(),
+    claimsDone: (d.claimsDone as BN).toNumber(),
+  };
+}
+
 export async function buyLive(wallet: WalletLike, id: number, lamports: number): Promise<string> {
   const trader = wallet.publicKey!;
+  // the marker is an Option<Account> on the program side: pass it when the
+  // launch has one, `null` otherwise. null is the program-id sentinel the
+  // program reads as None; an OMITTED key makes Anchor's JS resolver derive
+  // the PDA from the IDL's seeds (it ignores `optional`) and the buy fails
+  // on-chain with AccountNotInitialized. The devnet IDL has no such slot and
+  // ignores the key.
+  const pump = CLUSTER === 'mainnet' && await isPumpLaunch(id) ? { pump: pumpPda(id) } : { pump: null as any };
   return sendHealing(wallet, id, async (sk) => program.methods.buy(new BN(lamports)).accountsPartial({
-    sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id), pump: null as any,
+    sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id), ...pump,
   }).instruction());
 }
 

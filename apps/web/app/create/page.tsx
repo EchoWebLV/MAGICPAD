@@ -21,7 +21,7 @@ import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js'
 import {
   CLUSTER, CONFIG, DLP, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, PLATFORM,
   PROGRAM_ID, TOKEN_PROGRAM, VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT,
-  buyQuote, fetchFees, fmtSol, fmtTok, launchPda, mintPda, program, sessionPda,
+  buyQuote, fetchFees, fmtSol, fmtTok, launchPda, mintPda, program, pumpPda, sessionPda,
 } from '../../lib/magicpad';
 import { metaMemoIx, pinAssets, squashImage } from '../../lib/metadata';
 import { gateEntry, launchSessionKey } from '../../lib/trade-live';
@@ -65,6 +65,7 @@ export default function Create() {
   const [taxBps, setTaxBps] = useState(0);
   const [fairest, setFairest] = useState(false);
   const [fairInfo, setFairInfo] = useState(false);
+  const [pump, setPump] = useState(false);   // graduate on pump.fun at 1 SOL (mainnet only)
 
   const refreshBal = useCallback(() => {
     if (!publicKey) { setBal(null); return; }
@@ -79,7 +80,7 @@ export default function Create() {
   const dv = devBuy.trim() === '' ? 0 : Number(devBuy);
   const overCurve = Number.isFinite(dv) && dv > 0 && dv > DEV_BUY_MAX;
   const devOk = dv === 0 || (Number.isFinite(dv) && dv >= DEV_BUY_MIN && dv <= DEV_BUY_MAX);
-  const devLamports = !fairest && devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
+  const devLamports = !fairest && !pump && devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
   // the creator is the first buy by construction — this quote IS the fill
   const alloc = devLamports > 0
     ? buyQuote(VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, BigInt(devLamports)) : 0n;
@@ -122,6 +123,13 @@ export default function Create() {
           tokenProgram: TOKEN_PROGRAM, systemProgram: SystemProgram.programId,
         }).instruction(),
       );
+      // the marker must exist before the first trade (enable_pump → PumpTooLate
+      // afterwards), so it rides in the creation tx
+      if (pump) {
+        tx.add(await (program.methods as any).enablePump(new BN(id)).accountsPartial({
+          creator: publicKey, launch, pump: pumpPda(id), systemProgram: SystemProgram.programId,
+        }).instruction());
+      }
       const signers: Keypair[] = [];
       let cosign: ((t: Transaction) => Promise<void>) | undefined;
       if (devLamports > 0) {
@@ -205,14 +213,14 @@ export default function Create() {
         <div className="field">
           <label>buy at launch (◎), any size</label>
           <div className="presets" style={{ margin: '0 0 8px' }}>
-            <button type="button" disabled={fairest} className={`preset${dv === 0 ? ' on' : ''}`} onClick={() => setDevBuy('')}>
+            <button type="button" disabled={fairest || pump} className={`preset${dv === 0 ? ' on' : ''}`} onClick={() => setDevBuy('')}>
               none
             </button>
             {DEV_BUY_PRESETS.map((n) => (
               <button
                 key={n}
                 type="button"
-                disabled={fairest}
+                disabled={fairest || pump}
                 className={`preset${dv === n ? ' on' : ''}`}
                 onClick={() => setDevBuy(String(n))}
               >
@@ -222,7 +230,7 @@ export default function Create() {
           </div>
           <input
             value={devBuy} onChange={(e) => setDevBuy(e.target.value)}
-            placeholder="0.25, 1, 2.5…" inputMode="decimal" disabled={fairest}
+            placeholder="0.25, 1, 2.5…" inputMode="decimal" disabled={fairest || pump}
           />
           {devLamports > 0 && (
             <p className="note" style={{ marginTop: 6 }}>
@@ -278,6 +286,26 @@ export default function Create() {
             </div>
           )}
         </div>
+        {CLUSTER === 'mainnet' && (
+          <div className="field">
+            <div className="fairrow">
+              <label className="faircheck">
+                <input
+                  type="checkbox" checked={pump}
+                  onChange={(e) => { setPump(e.target.checked); if (e.target.checked) setDevBuy(''); }}
+                />
+                <span>graduate on pump.fun at 1◎</span>
+              </label>
+            </div>
+            {pump && (
+              <p className="note" style={{ marginTop: 6 }}>
+                the dark curve stops at 1◎ instead of {fmtSol(GRADUATION_LAMPORTS, 0)}◎. the pot then
+                buys every holder&apos;s share on pump.fun straight into their wallet — no pool, no claim,
+                no first buy. the token page gets a pump.fun link once it&apos;s live.
+              </p>
+            )}
+          </div>
+        )}
         <div className="field">
           <label>description (optional)</label>
           <textarea

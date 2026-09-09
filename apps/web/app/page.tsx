@@ -6,7 +6,7 @@ import Glyph from '../components/Glyph';
 import TokenArt from '../components/TokenArt';
 import { pickFeatured } from '../components/Featured';
 import {
-  GRADUATION_LAMPORTS, LaunchView, fetchLaunches, fmtSol,
+  LaunchView, fetchLaunches, fmtSol, graduationFor,
 } from '../lib/magicpad';
 
 function fmtDate(ts: number) {
@@ -74,8 +74,8 @@ export default function Landing() {
                     <span className="chip">${l.symbol}</span>
                   </div>
                   <div className="lp-prog">
-                    <i style={{ width: `${l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100)}%` }} />
-                    <span>{(l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / GRADUATION_LAMPORTS) * 100)).toFixed(0)}%</span>
+                    <i style={{ width: `${l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / graduationFor(l)) * 100)}%` }} />
+                    <span>{(l.state === 3 ? 100 : Math.min(100, (l.realSolRaised / graduationFor(l)) * 100)).toFixed(0)}%</span>
                   </div>
                   <div className="lp-card-meta">
                     <div>
