@@ -113,7 +113,7 @@ pub const PUMP_FEE_PROGRAM: Pubkey = pubkey!("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchM
 | `buy` (existing) | ER | session key | Gains `pump: Option<Account<PumpLaunch>>`. Threshold = `PUMP_GRADUATION_LAMPORTS` when `Some`, else `GRADUATION_LAMPORTS`. Nothing else changes. The ER clones the non-delegated PDA read-only (Platform precedent in `freeze_launch`). |
 | `set_pump_mint(mint)` | L1 | admin | Once. Requires `launch.state ∈ {FROZEN, RECONCILED}`, `pump_mint == default`, and pump `bonding_curve` (`["bonding-curve", mint]` under pump) deserialises with `creator == launch.creator` and `complete == false`. Stores `pump_mint`. |
 | `pump_claim(amount, max_sol_cost)` | L1 | admin (keeper CLI) | Replaces `claim_tokens` for pump launches. Not a permissionless crank: caller-chosen `amount` means a stranger could shortchange a holder — one token into the ATA marks `tokens_claimed` and the real share is gone — and `max_sol_cost` is bounded only by the whole pot, so no self-service path exists either: the holder cranking herself could overpay the curve out of everyone's pot. See flow below. |
-| `pump_graduate(amount, max_sol_cost)` | L1 | admin | Requires every traded session claimed or bookkept (`claims_done == sessions_opened`, `sessions_reconciled == sessions_opened`, `state ∈ {FROZEN, RECONCILED}`). `amount > 0`: flip pot + pot dust → launch vault → pump `buy` into the vault's own ATA → `burn` → close the ATA → close the accumulator → vault residue back to the launch. `amount == 0`: no buy (the CLI passes 0 when the pot is under the 0.01 SOL floor — rent would eat it). Either way the launch is then swept to rent-minimum with the remainder to the platform PDA, the Mooner mint authority is revoked (supply is 0), `state = GRADUATED`. |
+| `pump_graduate(amount, max_sol_cost)` | L1 | admin | Requires every traded session claimed or bookkept (`claims_done == sessions_opened`, `sessions_reconciled == sessions_opened`, `state ∈ {FROZEN, RECONCILED}`). `amount > 0`: flip pot + pot dust → launch vault → pump `buy` into the vault's own ATA → `burn` → close the ATA → close the accumulator → vault residue back to the launch. `amount == 0`: no buy (the CLI passes 0 when the pot is under the 0.01 SOL floor — rent would eat it), and `max_sol_cost` must then be 0 too (`BadQuote`). The burn is of whatever the vault's ATA **holds**, never of `amount` — see the flow below. Either way the launch is then swept to rent-minimum with the remainder to the platform PDA, the Mooner mint authority is revoked (supply is 0), `state = GRADUATED`. |
 
 `claim_tokens` and `graduate` (the two instructions that mint the Mooner
 supply) gain a **required** `pump: UncheckedAccount` constrained to the
@@ -231,6 +231,100 @@ the keeper never appears as a funder of any holder's account.
 
 Platform tax: **waived** in pump mode (`config.launch_tax_bps` not applied). The
 62 bps on 1 SOL is 0.0062 SOL; the crank's tx fees exceed it.
+
+### `pump_graduate` flow (measured against the real mainnet pump ELF)
+
+Accounts: admin (S, W), platform (W — the residue lands here), launch (W),
+pump (W), the Mooner mint (W), the launch-level vault `["pumpvault",
+launch_id]` (W), that vault's ATA for `pump_mint` (W), `pump_mint` (W —
+`burn` moves supply), the 13 pump-side accounts with `user = vault`, then
+token / ata / system.
+
+Order inside the handler is load-bearing: `is_settled()` → `claims_done ==
+sessions_opened` → the `vault_ata` derivation check → `need = max_sol_cost +
+claim_allowance()` → the `pot_available` bound (reserving nothing: the flip
+pot is exactly what graduation spends) → `fund_vault` → `create_idempotent`
+→ pump `buy` → `burn` → `close_account` → `sweep_vault` → `set_authority`
+(the never-minted Mooner mint is sealed) → `state = GRADUATED` → residue →
+platform. The residue block must come **last**: a program-owned account's
+lamports move by direct arithmetic and the runtime learns of such a move
+only for the accounts the next CPI names, so a residue moved before
+`set_authority` (which names the platform but not the launch) enters that
+CPI as an unexplained credit — `UnbalancedInstruction`. Moving it earlier
+fails all four original graduate tests.
+
+**The burn takes the ATA's whole balance, not `amount`.** The vault's ATA is
+`ATA(["pumpvault", launch_id], pump_mint)`, derivable from public state from
+`set_pump_mint` on, so anyone — every claimed holder holds raw units — can
+open it and park dust in it for the price of the ATA rent (≈0.002 SOL) plus
+one raw unit. Burning only `amount` leaves that dust behind and
+`close_account` refuses a non-empty account ("Non-native account can only be
+closed if its balance is zero", SPL `0xb`), aborting at 130,492 CU. That
+jams every `amount > 0` graduation of the launch permanently: the admin's
+only remaining exit is `amount = 0`, which hands the whole remainder to the
+platform instead of putting it into the curve as burnt liquidity —
+411,112,089 lamports, ≈41 % of a 1 SOL raise, in the test. Regression test:
+`pump_graduate_burns_dust_parked_in_the_vault_ata`.
+
+**`max_sol_cost` is an ALL-IN cap** — curve leg + protocol fee + creator fee
++ buyback, not just the curve. Binary search on the captured curve: the buy
+succeeds at exactly **147,304,125** lamports and fails `TooMuchSolRequired`
+(6002) one lamport below, and 147,304,125 is exactly the sum of the four
+deltas (bonding curve, fee recipient, buyback, creator vault). This is why
+`need = max_sol_cost + claim_allowance()` cannot be starved by fees: the
+fees are inside the cap, and the allowance covers only rent. Conservation is
+exact — `launch_before − launch_after == platform gain + Σ pump-side gains`,
+558,416,214 = 411,112,089 + 147,304,125, vault and vault ATA both at 0.
+
+**Compute:** a funded graduate consumes **145,861** CU (136,775 when the
+vault's ATA already exists and `create_idempotent` no-ops); the dust failure
+path aborts at 130,260–130,492. The CLI's 400k limit is ≈2.5× headroom.
+(The review's 145,628 was measured before the burn-the-balance change;
+deserialising the ATA to read its balance costs the extra ≈233 CU.)
+
+**`amount = 0` is the graduate step's universal escape hatch** — a completed
+curve, a repriced curve, a `TooMuchSolRequired`: pass 0 and the launch still
+reaches GRADUATED, with the remainder going to the platform instead of the
+curve. `pump_claim` has no equivalent for a session with `tokens_held > 0`
+(it requires `amount > 0`), so a stuck pump curve strands claims, not
+graduation. On the zero branch `max_sol_cost` must be 0 (`BadQuote`
+otherwise): nothing is bought, so a cap there can only be a CLI
+argument-order slip. Note `pump_claim`'s flat-session branch
+(`tokens_held == 0`) does **not** bind `max_sol_cost` — nothing is spent
+there either, and Task 6 was closed before this was noticed.
+
+**Trust boundary of the 13 pump-side accounts.** Our program pins by address
+only `pump_program` and `pump_fee_program`; `pump_mint` is pinned through
+`pump.pump_mint`, and `vault_ata` by ATA derivation over BOTH the vault's
+key and the mint — a substituted ATA fails `BadPumpAccount` before a single
+lamport moves (`pump_graduate_rejects_a_wrong_vault_ata`). Everything else —
+`global`, the bonding curve, the associated bonding curve, the creator
+vault, the event authority, both volume accumulators, the fee config,
+bonding-curve-v2 and both fee recipients — is validated by pump.fun itself
+inside the CPI, not by us.
+
+**`flip_pot` stays non-zero on a GRADUATED pump launch.** Its lamports leave
+inside the residue but the field keeps its last value, mirroring
+`graduate_handler`. A consumer reading `flip_pot` on a GRADUATED launch is
+reading a stale number.
+
+Open items from the Task 7 review, both to resolve before mainnet:
+
+- **Tasks 7 and 8 ship as one unit.** Until Task 8 lands, `claim_tokens`
+  (`reconcile.rs`) is permissionless and carries no pump guard: a stranger
+  can crank it for any holder of a pump launch. That mints the Mooner token,
+  makes that session's `pump_claim` fail `AlreadyClaimed` (6009) and
+  `pump_graduate` fail `PumpClaimsOutstanding` (6028) **forever** — the pot
+  is stuck, `lock_mint` impossible, the Mooner mint authority live.
+  `pump_graduate`'s `claims_done == sessions_opened` gate turns a
+  per-session block into a whole-launch brick, so this branch must not reach
+  mainnet before Task 8.
+- `reconcile.rs:223-225` states that a direct `+=` on a program-owned
+  account "doesn't commit in this runtime" and routes the platform tax
+  through a system transfer; `pump_graduate` bets its residue on the
+  opposite, and the conservation test shows that direct credit to `platform`
+  commits exactly, to the lamport. One of the two comments is wrong.
+  Resolve it before mainnet — without touching the working path.
 
 ### Errors (new)
 
