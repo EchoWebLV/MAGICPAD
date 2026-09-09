@@ -145,17 +145,25 @@ const tok = (n) => (Number(n) / 1e6).toLocaleString('en-US', { maximumFractionDi
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const die = (msg) => { console.error(`✗ ${msg}`); process.exit(1); };
 
-/** true when a failed send carries our program's error `code`.
- *  `e.logs` is a DEPRECATED @solana/web3.js getter (1.98.4,
- *  lib/index.cjs.js:2195 "@deprecated Use await getLogs() instead") that hands
- *  back the cached array only while it is not still a promise — so read the
- *  underlying `e.transactionLogs` too. The message also embeds the RPC's
- *  "custom program error: 0x…" for a preflight failure, which is the arm that
- *  actually fires today. */
+/** A failed send's program logs as one string — the ONLY reader of them in
+ *  this file, so every printing site gets the same fallback. `e.logs` is a
+ *  DEPRECATED @solana/web3.js getter (1.98.4, lib/index.cjs.js:2195
+ *  "@deprecated Use await getLogs() instead") that hands back the cached array
+ *  only while it is not still a promise — hence the underlying
+ *  `e.transactionLogs`, and hence the Array.isArray guard: this runs inside
+ *  error handling, where a TypeError would swallow the failure it is
+ *  reporting. */
+const logsOf = (e) => {
+  const l = e?.logs ?? e?.transactionLogs ?? [];
+  return (Array.isArray(l) ? l : []).join('\n');
+};
+
+/** true when a failed send carries our program's error `code`. The message
+ *  also embeds the RPC's "custom program error: 0x…" for a preflight failure,
+ *  which is the arm that actually fires today. */
 function isProgramError(e, code) {
   if (code == null) return false;
-  const logs = e?.logs ?? e?.transactionLogs ?? [];
-  const text = [e?.message ?? '', ...(Array.isArray(logs) ? logs : [])].join('\n').toLowerCase();
+  const text = [e?.message ?? '', logsOf(e)].join('\n').toLowerCase();
   return text.includes(`custom program error: 0x${code.toString(16)}`)
     || text.includes(`error number: ${code}`);
 }
@@ -305,6 +313,51 @@ async function main() {
     return info ? offline.decodeBondingCurveNullable(info) : null;
   };
 
+  // M-3: the PLAN's shape is settled before phase 1, not between phase 1 and
+  // phase 2. Everything below reads only what the preconditions already
+  // fetched — `sessions` from getProgramAccounts, `pumpAcc.claimsDone`,
+  // `l.sessionsOpened` — and nothing phase 1 produces (the mint, the curve,
+  // the allowance, the pot). set_pump_mint touches neither counter
+  // (pump.rs:97-113 only writes p.pump_mint), so the values here are the same
+  // values phase 2 would read. Running the coverage guard first means an RPC
+  // that lost a session PDA is caught BEFORE create + set_pump_mint make the
+  // CA public and pin it one-shot (pump.rs:104) — otherwise the operator
+  // debugs an incomplete plan while a third party can move the curve.
+  const traded = sessions.filter((x) => x.s.solSpent.gtn(0));
+  const holders = traded.filter((x) => x.s.tokensHeld.gtn(0) && !x.s.tokensClaimed)
+    // cheapest average entry claims first — they paid least on Mooner, they pay least on pump
+    .sort((a, b) => a.s.costBasis.mul(b.s.tokensHeld).cmp(b.s.costBasis.mul(a.s.tokensHeld)));
+  const flat = traded.filter((x) => x.s.tokensHeld.isZero() && !x.s.tokensClaimed);
+  const skipped = sessions.length - traded.length;
+  // I4: --only names one session; it has to exist and still be crankable, and
+  // the check runs off the same discovered list phase 2 iterates.
+  if (only) {
+    const hit = sessions.find((x) => x.s.trader.equals(only));
+    if (!hit) {
+      die(`--only ${only.toBase58()} has no session on launch ${id}. Discovered traders:\n`
+        + sessions.map((x) => `      ${x.s.trader.toBase58()}`).join('\n'));
+    }
+    if (hit.s.tokensClaimed) die(`--only ${only.toBase58()} has already claimed (tokens_claimed) — nothing to crank`);
+    if (hit.s.solSpent.isZero()) die(`--only ${only.toBase58()} never bought (sol_spent 0) — sessions_opened never counted it, so there is nothing to claim`);
+    if (ovAmount && hit.s.tokensHeld.isZero()) {
+      die(`--only ${only.toBase58()} is a flat session (tokens_held 0): pump_claim requires amount == 0 there`
+        + ` (pump.rs:245-247), so --amount/--max-sol do not apply — rerun with --only alone`);
+    }
+  }
+  // I5: every input to the completeness check is already in hand, so run it
+  // BEFORE the first claim rather than after the last. A session PDA that
+  // getProgramAccounts missed (a paginating or rate-limited RPC is the
+  // realistic cause) means the launch can never reach GRADUATED — and the
+  // operator should learn that before N claims have spent the pot.
+  const predicted = pumpAcc.claimsDone.toNumber() + holders.length + flat.length;
+  if (predicted !== l.sessionsOpened.toNumber()) {
+    const msg = `plan covers ${predicted}/${l.sessionsOpened} sessions`
+      + ` (claims_done ${pumpAcc.claimsDone} + ${holders.length} holder(s) + ${flat.length} flat)`
+      + ` — a session is missing; check getProgramAccounts against the ER stragglers`;
+    if (only) console.warn(`  ⚠ ${msg} — warning only under --only, which never graduates`);
+    else die(`${msg}. Refusing to send.`);
+  }
+
   // ---- phase 1: create + set_pump_mint ----
   if (!pinned) {
     const bcAddr = sdk.bondingCurvePda(pumpMint);
@@ -351,8 +404,11 @@ async function main() {
       pumpMint, pumpBondingCurve: bcAddr,
     }).instruction());
     if (confirm) {
+      // no re-fetch of `pumpAcc` here: set_pump_mint writes only p.pump_mint
+      // (pump.rs:97-113), the only reader of claims_done before the loop now
+      // runs above this block (M-3), and the authoritative post-loop check
+      // re-reads the account itself.
       await send(ixs, signers, `create ${l.symbol} on pump.fun + set_pump_mint`);
-      pumpAcc = await program.account.pumpLaunch.fetch(pump);
     } else {
       log(`[dry] would ${curve ? '' : 'create the pump token and '}set_pump_mint (${signers.length} signer(s))`);
     }
@@ -376,27 +432,6 @@ async function main() {
   const potForClaims = () => conn.getBalance(launch).then((b) => b - rentMin - flipPot);
   const potForGraduate = () => conn.getBalance(launch).then((b) => b - rentMin);
 
-  const traded = sessions.filter((x) => x.s.solSpent.gtn(0));
-  const holders = traded.filter((x) => x.s.tokensHeld.gtn(0) && !x.s.tokensClaimed)
-    // cheapest average entry claims first — they paid least on Mooner, they pay least on pump
-    .sort((a, b) => a.s.costBasis.mul(b.s.tokensHeld).cmp(b.s.costBasis.mul(a.s.tokensHeld)));
-  const flat = traded.filter((x) => x.s.tokensHeld.isZero() && !x.s.tokensClaimed);
-  const skipped = sessions.length - traded.length;
-  // I4: --only names one session; it has to exist and still be crankable, and
-  // the check runs off the same discovered list phase 2 iterates.
-  if (only) {
-    const hit = sessions.find((x) => x.s.trader.equals(only));
-    if (!hit) {
-      die(`--only ${only.toBase58()} has no session on launch ${id}. Discovered traders:\n`
-        + sessions.map((x) => `      ${x.s.trader.toBase58()}`).join('\n'));
-    }
-    if (hit.s.tokensClaimed) die(`--only ${only.toBase58()} has already claimed (tokens_claimed) — nothing to crank`);
-    if (hit.s.solSpent.isZero()) die(`--only ${only.toBase58()} never bought (sol_spent 0) — sessions_opened never counted it, so there is nothing to claim`);
-    if (ovAmount && hit.s.tokensHeld.isZero()) {
-      die(`--only ${only.toBase58()} is a flat session (tokens_held 0): pump_claim requires amount == 0 there`
-        + ` (pump.rs:245-247), so --amount/--max-sol do not apply — rerun with --only alone`);
-    }
-  }
   // the pro-rata denominator stays over EVERY unclaimed holder even under
   // --only, so the holders that are not being cranked keep their share and
   // their allowance reserved
@@ -407,19 +442,6 @@ async function main() {
   log(`pot ${sol(claimPot0)} for claims (launch − rent − flip pot ${sol(flipPot)}), ${sol(gradPot0)} for graduation · ${holders.length} holder(s), ${flat.length} flat, ${skipped} never traded · already claimed ${sessions.filter((x) => x.s.tokensClaimed).length}`);
   if (holders.length && spendable <= 0) die(`pot cannot cover ${holders.length} claim allowance(s) of ${sol(allowance)}`);
 
-  // I5: every input to the completeness check is already in hand, so run it
-  // BEFORE the first claim rather than after the last. A session PDA that
-  // getProgramAccounts missed (a paginating or rate-limited RPC is the
-  // realistic cause) means the launch can never reach GRADUATED — and the
-  // operator should learn that before N claims have spent the pot.
-  const predicted = pumpAcc.claimsDone.toNumber() + holders.length + flat.length;
-  if (predicted !== l.sessionsOpened.toNumber()) {
-    const msg = `plan covers ${predicted}/${l.sessionsOpened} sessions`
-      + ` (claims_done ${pumpAcc.claimsDone} + ${holders.length} holder(s) + ${flat.length} flat)`
-      + ` — a session is missing; check getProgramAccounts against the ER stragglers`;
-    if (only) console.warn(`  ⚠ ${msg} — warning only under --only, which never graduates`);
-    else die(`${msg}. Refusing to send.`);
-  }
   if (only) {
     console.log(`\n  *** --only ${only.toBase58()}: PHASE 2 CRANKS THAT SESSION ALONE AND PHASE 3`
       + ` (pump_graduate) IS SKIPPED. Rerun without flags once every session has claimed. ***`);
@@ -487,6 +509,10 @@ async function main() {
       virtualTokenReserves: c.virtualTokenReserves.sub(bought),
       realQuoteReserves: c.realQuoteReserves.add(leg),
       realTokenReserves: c.realTokenReserves.sub(bought),
+      // a preview that drains realTokenReserves has COMPLETED the curve; without
+      // this the next quote returns BN.min(x, 0) = 0 and zeroQuoteWhy reports
+      // "too thin to buy a single token" instead of "the curve has completed"
+      complete: c.complete || c.realTokenReserves.sub(bought).isZero(),
     };
   };
   // what the claims will take out of the launch, worst case: the whole cap
@@ -517,6 +543,9 @@ async function main() {
     const spendableNow = confirm ? pool - remainingHolders * allowance : spendable;
     const ceiling = s.tokensHeld.muln(10_000 - HAIRCUT_BPS).divn(10_000);
     let budget = budgetFor(s.tokensHeld, spendableNow, confirm ? remainingHeld : totalHeld);
+    // this session's FAIR slice, captured before an override can overwrite
+    // `budget` — it is what an override is measured against below
+    const fairShare = budget;
     let amount;
     let curve = null;
     if (ovAmount) {
@@ -532,10 +561,30 @@ async function main() {
           + ` (pump.rs:250-252, ClaimTooLarge)`);
       }
       // `pool` is this iteration's pot: a fresh potForClaims() in --confirm,
-      // claimPot0 in the dry run
-      if (ovMaxSol + allowance > pool) {
-        die(`--max-sol ${ovMaxSol} + allowance ${allowance} = ${ovMaxSol + allowance} > pot ${pool}`
-          + ` (pump.rs:255-259, PotTooSmall)`);
+      // claimPot0 in the dry run.
+      // The cap has to reserve an allowance for EVERY holder still waiting,
+      // not just this one. `remainingHolders` is the FULL unclaimed set here:
+      // the --only skip at the top of this loop `continue`s before the
+      // decrement at the bottom, so a holder that is not being cranked still
+      // counts. This subsumes the program's own per-instruction bound
+      // (max_sol_cost + claim_allowance() <= pot_available, pump.rs:255-259):
+      // inside this loop remainingHolders >= 1 and allowance > 0, so
+      // ovMaxSol + allowance <= ovMaxSol + remainingHolders * allowance <= pool
+      // whenever this check passes — no separate die is needed for it.
+      if (ovMaxSol + remainingHolders * allowance > pool) {
+        const others = remainingHolders - 1;
+        die(`--max-sol ${ovMaxSol} leaves ${pool - ovMaxSol} of the ${pool}-lamport pot for the ${others}`
+          + ` holder(s) still waiting, who need ${others * allowance} in allowances alone (${allowance} each)`
+          + ` before they can buy anything — and this session's own ${allowance} comes out of the same pot`
+          + ` (pump.rs:255-259, PotTooSmall). Their claims could never land, claims_done would never reach`
+          + ` sessions_opened, and pump_graduate would block forever (pump.rs:415-418) with the pot stranded`
+          + ` on the launch. The ceiling here is ${pool - remainingHolders * allowance} lamports.`);
+      }
+      if (ovMaxSol > fairShare) {
+        console.log(`  *** --max-sol ${ovMaxSol} IS ${ovMaxSol - fairShare} LAMPORTS ABOVE THIS SESSION'S`
+          + ` PRO-RATA SHARE (${fairShare}) — THE DIFFERENCE COMES OUT OF THE ${remainingHolders - 1} HOLDER(S)`
+          + ` STILL WAITING, AND IS FINAL FOR THEM: tokens_claimed is set unconditionally (pump.rs:301), so`
+          + ` they cannot be topped up later ***`);
       }
       budget = ovMaxSol;
       amount = ovAmount;
@@ -567,7 +616,7 @@ async function main() {
       if (!isProgramError(e, E_POT_TOO_SMALL)) throw e;
       if (ovAmount) {
         // never quietly overrule the operator's own numbers
-        console.error(e.logs ? e.logs.join('\n') : '');
+        console.error(logsOf(e));
         die(`the override (amount ${ovAmount}, max-sol ${ovMaxSol}) hit PotTooSmall — the pot moved under it;`
           + ` re-read the pot and pick smaller numbers`);
       }
@@ -588,7 +637,7 @@ async function main() {
       try {
         sigs.push(await send([await claimIx(amount2, retry)], [keeper], label(amount2, retry)));
       } catch (e2) {
-        console.error(e2.logs ? e2.logs.join('\n') : '');
+        console.error(logsOf(e2));
         die(`pump_claim ${s.trader.toBase58()} failed twice: budget ${budget} then ${retry}, pot ${fresh}, allowance ${allowance}, amounts ${amount} then ${amount2} — ${e2.message ?? e2}`);
       }
     }
@@ -617,16 +666,26 @@ async function main() {
       : `\n[dry] nothing sent. Rerun with --confirm to execute.\n`);
     return;
   }
-  // the authoritative second check: I5 already ran the predicted form before
-  // the first send, this one re-reads what actually landed
-  if (confirm) pumpAcc = await program.account.pumpLaunch.fetch(pump);
-  const claimsAfter = confirm ? pumpAcc.claimsDone.toNumber() : predicted;
-  if (claimsAfter !== l.sessionsOpened.toNumber()) {
-    die(`claims ${claimsAfter}/${l.sessionsOpened} — a session is missing; check getProgramAccounts against the ER stragglers`);
+  // the authoritative second check, --confirm only: the guard above phase 1
+  // already compared the PREDICTED count, so in a dry run this would be the
+  // same comparison a second time. Under --confirm it re-reads what landed.
+  if (confirm) {
+    pumpAcc = await program.account.pumpLaunch.fetch(pump);
+    const claimsAfter = pumpAcc.claimsDone.toNumber();
+    if (claimsAfter !== l.sessionsOpened.toNumber()) {
+      die(`claims ${claimsAfter}/${l.sessionsOpened} — a session is missing; check getProgramAccounts against the ER stragglers`);
+    }
   }
   // graduation may spend the flip pot, so the remainder is read off
   // potForGraduate — dry run subtracts the claim spends it just predicted,
   // which is a FLOOR (every claim was charged its full cap and allowance).
+  // How far under: with the live re-slice each claim's slack goes to the
+  // holders still waiting, so what actually reaches graduation is the LAST
+  // holder's slack alone — its unspent cap plus the refunded
+  // user_volume_accumulator rent, so at least rent(137) = 1,844,400 lamports.
+  // Simulated across five holder distributions on a 1◎ pot: 0.0033–0.0057◎
+  // (…/scratchpad/rr-i1-sim.mjs, "leftover claim pot"), against 0.0096–0.0259◎
+  // under the pre-I1 static rule — which is where the old "~0.012◎" came from.
   // The dry-run quote below runs against previewCurve, which the holder loop
   // has already advanced by every planned buy (I2).
   const remaining = confirm ? await potForGraduate() : gradPot0 - predictedClaimSpend;
@@ -645,8 +704,9 @@ async function main() {
     }
   }
   const remainderLabel = confirm ? `remainder ${sol(remaining)}`
-    : `remainder ≥ ${sol(remaining)} (floor: every claim was charged its full cap and allowance;`
-      + ` the live figure runs up to ~0.012◎ higher, so a burn buy may still happen)`;
+    : `remainder ≥ ${sol(remaining)} (floor: every claim charged its full cap and allowance; the live`
+      + ` figure runs about one holder's slack higher — simulated 0.003–0.006◎ — so a burn buy may still`
+      + ` happen)`;
   console.log(`  graduate: ${remainderLabel} → ${gAmount.isZero() ? `no burn buy (${why})` : `buy + burn ≥ ${tok(gAmount)} ${l.symbol} ≤ ${sol(gMax)}`}, residue → platform, Mooner mint sealed`);
   if (!confirm) {
     console.log(`\n[dry] nothing sent. Rerun with --confirm to execute.\n`);
@@ -675,4 +735,4 @@ async function main() {
     + ` · https://pump.fun/coin/${pumpMint.toBase58()}`);
 }
 
-main().catch((e) => { console.error(e.logs ? e.logs.join('\n') : ''); die(e.message ?? e); });
+main().catch((e) => { console.error(logsOf(e)); die(e.message ?? e); });
