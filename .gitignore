@@ -22,3 +22,8 @@ scripts/mainnet-canary/
 
 # local dev-server config for the preview pane
 .claude/
+
+# pump.fun mainnet fixtures for litesvm (10 MB ELF) — captured locally by scripts/dump-pump-fixtures.mjs
+litesvm-tests/fixtures/
+# pump.fun mint keypairs — the CA is known before launch, the secret never leaves this machine
+scripts/pump-mints/

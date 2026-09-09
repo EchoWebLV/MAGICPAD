@@ -21,7 +21,11 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 # MagicBlock SDK's "anchor" feature maps to anchor-lang-current = "1.0",
 # so =1.0.2 here unifies everything (mixing 0.31 with the SDK splits the
 # graph into multiple anchor-langs and nothing type-checks).
-anchor-lang = { version = "=1.0.2", features = ["init-if-needed"] }
+# allow-missing-optionals: a trailing Option<Account> may be OMITTED from the
+# tx (→ None) instead of erroring with AccountNotEnoughKeys. Existing
+# 3-account buy/sell txs and the devnet IDL keep working once `buy` grows an
+# optional `pump` account (Task 4).
+anchor-lang = { version = "=1.0.2", features = ["init-if-needed", "allow-missing-optionals"] }
 anchor-spl = "=1.0.2"
 # MagicBlock: delegation + commit/undelegate. No VRF — the curve is deterministic.
 ephemeral-rollups-sdk = { version = "=0.14.3", features = ["anchor"] }
