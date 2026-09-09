@@ -331,6 +331,13 @@ pub fn buy_ix(session_key: &Address, trader: &Address, launch_id: u64, amount_in
     }
 }
 
+/// buy with the trailing optional `pump` account — the ER path for pump launches
+pub fn buy_ix_pump(session_key: &Address, trader: &Address, launch_id: u64, amount_in: u64) -> Instruction {
+    let mut ix = buy_ix(session_key, trader, launch_id, amount_in);
+    ix.accounts.push(AccountMeta::new_readonly(pump_pda(launch_id), false));
+    ix
+}
+
 pub fn sell_ix(session_key: &Address, trader: &Address, launch_id: u64, tokens_in: u64) -> Instruction {
     Instruction {
         program_id: program_id(),

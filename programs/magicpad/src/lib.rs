@@ -127,7 +127,7 @@ pub mod magicpad {
     }
 
     // -- the curve (ER, gasless, ledger-only) --
-    pub fn buy(ctx: Context<TradeEr>, amount_in: u64) -> Result<()> {
+    pub fn buy(ctx: Context<BuyEr>, amount_in: u64) -> Result<()> {
         buy_handler(ctx, amount_in)
     }
 

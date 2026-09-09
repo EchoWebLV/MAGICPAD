@@ -4,7 +4,7 @@ use crate::constants::*;
 use crate::curve;
 use crate::error::MagicPadError;
 use crate::fair;
-use crate::state::{Launch, TradeSession, LAUNCH_BONDING, LAUNCH_FROZEN};
+use crate::state::{Launch, PumpLaunch, TradeSession, LAUNCH_BONDING, LAUNCH_FROZEN};
 
 // ============================================================================
 // The whole product lives in these two instructions. They run INSIDE the
@@ -32,7 +32,32 @@ pub struct TradeEr<'info> {
     pub launch: Box<Account<'info, Launch>>,
 }
 
-pub fn buy_handler(ctx: Context<TradeEr>, amount_in: u64) -> Result<()> {
+/// buy = TradeEr + an optional trailing `pump` marker. Present (and
+/// non-empty) → the launch freezes at PUMP_GRADUATION_LAMPORTS. Omitted → the
+/// account resolves to None (anchor-lang `allow-missing-optionals`) and the
+/// 85 SOL line applies, so pre-existing clients keep working unchanged.
+#[derive(Accounts)]
+pub struct BuyEr<'info> {
+    /// NOT the wallet — the throwaway key open_trade_session pinned.
+    pub session_signer: Signer<'info>,
+
+    #[account(mut,
+        seeds = [SESSION_SEED, session.launch_id.to_le_bytes().as_ref(), session.trader.as_ref()],
+        bump = session.bump,
+        constraint = session.session_key == session_signer.key() @ MagicPadError::SessionKeyMismatch)]
+    pub session: Box<Account<'info, TradeSession>>,
+
+    #[account(mut,
+        seeds = [LAUNCH_SEED, launch.id.to_le_bytes().as_ref()], bump = launch.bump,
+        constraint = launch.id == session.launch_id @ MagicPadError::WrongLaunch)]
+    pub launch: Box<Account<'info, Launch>>,
+
+    #[account(seeds = [PUMP_SEED, launch.id.to_le_bytes().as_ref()], bump)]
+    pub pump: Option<Account<'info, PumpLaunch>>,
+}
+
+pub fn buy_handler(ctx: Context<BuyEr>, amount_in: u64) -> Result<()> {
+    let line = if ctx.accounts.pump.is_some() { PUMP_GRADUATION_LAMPORTS } else { GRADUATION_LAMPORTS };
     let l = &mut ctx.accounts.launch;
     let s = &mut ctx.accounts.session;
     require!(l.state == LAUNCH_BONDING, MagicPadError::LaunchNotBonding);
@@ -105,7 +130,7 @@ pub fn buy_handler(ctx: Context<TradeEr>, amount_in: u64) -> Result<()> {
 
     // The crossing buy freezes the market. Graduation is a state change,
     // not a race — no sniping the migration block.
-    if l.real_sol_raised >= GRADUATION_LAMPORTS {
+    if l.real_sol_raised >= line {
         l.state = LAUNCH_FROZEN;
     }
     Ok(())
