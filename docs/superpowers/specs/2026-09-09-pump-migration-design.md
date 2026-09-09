@@ -251,7 +251,8 @@ lamports move by direct arithmetic and the runtime learns of such a move
 only for the accounts the next CPI names, so a residue moved before
 `set_authority` (which names the platform but not the launch) enters that
 CPI as an unexplained credit — `UnbalancedInstruction`. Moving it earlier
-fails all four original graduate tests.
+fails the four graduate tests that existed when it was measured (there are now
+seven).
 
 **The burn takes the ATA's whole balance, not `amount`.** The vault's ATA is
 `ATA(["pumpvault", launch_id], pump_mint)`, derivable from public state from
@@ -261,10 +262,11 @@ one raw unit. Burning only `amount` leaves that dust behind and
 `close_account` refuses a non-empty account ("Non-native account can only be
 closed if its balance is zero", SPL `0xb`), aborting at 130,492 CU. That
 jams every `amount > 0` graduation of the launch permanently: the admin's
-only remaining exit is `amount = 0`, which hands the whole remainder to the
-platform instead of putting it into the curve as burnt liquidity —
-411,112,089 lamports, ≈41 % of a 1 SOL raise, in the test. Regression test:
-`pump_graduate_burns_dust_parked_in_the_vault_ata`.
+only remaining exit is `amount = 0`, which hands the platform **558,416,214**
+lamports — the whole remainder, ≈50.8 % of the test's 1,100,000,001-lamport
+raise — instead of putting it into the curve as burnt liquidity, denying the
+curve the **147,304,125** lamports the funded path would have sent pump-side.
+Regression test: `pump_graduate_burns_dust_parked_in_the_vault_ata`.
 
 **`max_sol_cost` is an ALL-IN cap** — curve leg + protocol fee + creator fee
 + buyback, not just the curve. Binary search on the captured curve: the buy
@@ -277,8 +279,10 @@ exact — `launch_before − launch_after == platform gain + Σ pump-side gains`
 558,416,214 = 411,112,089 + 147,304,125, vault and vault ATA both at 0.
 
 **Compute:** a funded graduate consumes **145,861** CU (136,775 when the
-vault's ATA already exists and `create_idempotent` no-ops); the dust failure
-path aborts at 130,260–130,492. The CLI's 400k limit is ≈2.5× headroom.
+vault's ATA already exists and `create_idempotent` no-ops; an `amount = 0`
+graduate consumes **26,076** CU); the dust failure path now aborts at
+**130,492** CU (130,260 before the `TokenAccount` read was added). The planned
+CLI's 400k limit is ≈2.74× headroom (400,000 / 145,861).
 (The review's 145,628 was measured before the burn-the-balance change;
 deserialising the ATA to read its balance costs the extra ≈233 CU.)
 
