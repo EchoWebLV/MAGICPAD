@@ -1,7 +1,8 @@
 //! pump.fun under litesvm: mainnet ELFs + accounts captured by
 //! scripts/dump-pump-fixtures.mjs into ../fixtures (gitignored). Every
 //! pump-dependent test calls `load_pump` and returns early on None.
-//! Set PUMP_FIXTURES_REQUIRED=1 to make a missing capture fail instead of skip (the pre-merge command).
+//! Set PUMP_FIXTURES_REQUIRED (any value) to make a missing capture fail
+//! instead of skip; use it in the pre-merge command.
 use std::fs;
 use std::path::{Path, PathBuf};
 
