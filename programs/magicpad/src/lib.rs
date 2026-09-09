@@ -175,4 +175,8 @@ pub mod magicpad {
     pub fn enable_pump(ctx: Context<EnablePump>, launch_id: u64) -> Result<()> {
         enable_pump_handler(ctx, launch_id)
     }
+
+    pub fn set_pump_mint(ctx: Context<SetPumpMint>) -> Result<()> {
+        set_pump_mint_handler(ctx)
+    }
 }

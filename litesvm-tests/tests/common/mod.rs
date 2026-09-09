@@ -566,6 +566,21 @@ pub fn enable_pump_ix(creator: &Address, launch_id: u64) -> Instruction {
     }
 }
 
+pub fn set_pump_mint_ix(admin: &Address, launch_id: u64, pump_mint: &Address, bonding_curve: &Address) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(*admin, true),
+            AccountMeta::new_readonly(platform_pda(), false),
+            AccountMeta::new_readonly(launch_pda(launch_id), false),
+            AccountMeta::new(pump_pda(launch_id), false),
+            AccountMeta::new_readonly(*pump_mint, false),
+            AccountMeta::new_readonly(*bonding_curve, false),
+        ],
+        data: ix_data_empty("set_pump_mint"),
+    }
+}
+
 // ---------- borsh mirrors (skip the 8-byte discriminator) ----------
 
 #[derive(borsh::BorshDeserialize, Debug)]

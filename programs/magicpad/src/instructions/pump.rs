@@ -7,7 +7,8 @@ use anchor_lang::prelude::*;
 
 use crate::constants::*;
 use crate::error::MagicPadError;
-use crate::state::{Launch, PumpLaunch, LAUNCH_BONDING};
+use crate::pump_cpi;
+use crate::state::{Launch, Platform, PumpLaunch, LAUNCH_BONDING, LAUNCH_FROZEN, LAUNCH_RECONCILED};
 
 #[derive(Accounts)]
 #[instruction(launch_id: u64)]
@@ -47,5 +48,49 @@ pub fn enable_pump_handler(ctx: Context<EnablePump>, launch_id: u64) -> Result<(
     p.pump_mint = Pubkey::default();
     p.claims_done = 0;
     p.bump = ctx.bumps.pump;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct SetPumpMint<'info> {
+    pub admin: Signer<'info>,
+    #[account(
+        seeds = [PLATFORM_SEED],
+        bump = platform.bump,
+        constraint = platform.admin == admin.key() @ MagicPadError::Unauthorized,
+    )]
+    pub platform: Box<Account<'info, Platform>>,
+    #[account(seeds = [LAUNCH_SEED, launch.id.to_le_bytes().as_ref()], bump = launch.bump)]
+    pub launch: Box<Account<'info, Launch>>,
+    #[account(
+        mut,
+        seeds = [PUMP_SEED, launch.id.to_le_bytes().as_ref()],
+        bump = pump.bump,
+        constraint = pump.launch_id == launch.id @ MagicPadError::WrongLaunch,
+    )]
+    pub pump: Box<Account<'info, PumpLaunch>>,
+    /// CHECK: the pump.fun mint; only its key is recorded, the curve proves it
+    pub pump_mint: UncheckedAccount<'info>,
+    /// CHECK: pump's BondingCurve for pump_mint — owner + derivation checked here, creator/complete in the handler
+    #[account(
+        owner = pump_cpi::PUMP_PROGRAM @ MagicPadError::BadPumpAccount,
+        address = pump_cpi::bonding_curve(&pump_mint.key()) @ MagicPadError::BadPumpAccount,
+    )]
+    pub pump_bonding_curve: UncheckedAccount<'info>,
+}
+
+pub fn set_pump_mint_handler(ctx: Context<SetPumpMint>) -> Result<()> {
+    let l = &ctx.accounts.launch;
+    require!(
+        l.state == LAUNCH_FROZEN || l.state == LAUNCH_RECONCILED,
+        MagicPadError::LaunchNotFrozen
+    );
+    let p = &mut ctx.accounts.pump;
+    require!(p.pump_mint == Pubkey::default(), MagicPadError::PumpMintAlreadySet);
+    let head = pump_cpi::parse_bonding_curve(&ctx.accounts.pump_bonding_curve.try_borrow_data()?)
+        .ok_or(MagicPadError::BadPumpAccount)?;
+    // the pump token must be OURS (creator = launch creator) and still on its curve
+    require!(head.creator == l.creator && !head.complete, MagicPadError::BadPumpAccount);
+    p.pump_mint = ctx.accounts.pump_mint.key();
     Ok(())
 }
