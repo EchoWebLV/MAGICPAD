@@ -582,7 +582,7 @@ fn pump_claim_into_an_existing_ata() {
 fn pump_claim_rejects_a_stranger_crank() {
     // `amount` is caller-chosen, so a permissionless crank is a griefing
     // weapon: one token into the ATA marks tokens_claimed and the real share
-    // is gone forever. Only the admin or the trader may fire it.
+    // is gone forever. Only the admin may fire it.
     let mut svm = fresh_svm();
     let Some(px) = load_pump(&mut svm) else { return };
     let (t, pk) = claim_ready(&mut svm, &px);
@@ -594,30 +594,32 @@ fn pump_claim_rejects_a_stranger_crank() {
         &[],
         &[pump_claim_ix(&t.cranker.pubkey(), &alice, 0, &pk, amount, 700_000_000)],
     );
-    assert_pad_error(res, E_UNAUTHORIZED, "the cranker is neither the admin nor alice");
+    assert_pad_error(res, E_UNAUTHORIZED, "the cranker is not the admin");
     assert!(!read_session(&svm, 0, &alice).tokens_claimed, "her claim is untouched");
     assert_eq!(read_pump(&svm, 0).claims_done, 0);
 }
 
 #[test]
-fn pump_claim_by_the_trader_themself() {
-    // alice cranks her own session: the same pubkey fills the cranker and the
-    // trader slot (duplicate keys in one message are legal).
+fn pump_claim_rejects_the_trader_themself() {
+    // there is no self-service claim. The caller picks `amount` AND
+    // `max_sol_cost`, and the pot guard bounds `max_sol_cost` only by the
+    // whole pot — a holder cranking herself could overpay the curve out of
+    // everyone's pot. Only the budgeting keeper (the admin) may crank.
     let mut svm = fresh_svm();
     let Some(px) = load_pump(&mut svm) else { return };
     let (t, pk) = claim_ready(&mut svm, &px);
     let alice = t.alice.pubkey();
     let amount = ceiling_of(read_session(&svm, 0, &alice).tokens_held) / 2;
-    send(
+    let res = send(
         &mut svm,
         &t.alice,
         &[],
         &[pump_claim_ix(&alice, &alice, 0, &pk, amount, 700_000_000)],
-    )
-    .unwrap();
-    assert_eq!(token_amount(&svm, &ata_address(&alice, &pk.mint)), amount, "her exact share");
-    assert!(read_session(&svm, 0, &alice).tokens_claimed);
-    assert_eq!(read_pump(&svm, 0).claims_done, 1);
+    );
+    assert_pad_error(res, E_UNAUTHORIZED, "alice may not crank her own claim");
+    assert!(!read_session(&svm, 0, &alice).tokens_claimed, "her claim is untouched");
+    assert_eq!(read_pump(&svm, 0).claims_done, 0);
+    assert_eq!(lamports(&svm, &ata_address(&alice, &pk.mint)), 0, "no ata created");
 }
 
 #[test]
@@ -639,6 +641,56 @@ fn pump_claim_bookkeeping_for_a_flat_session() {
     assert!(read_session(&svm, 0, &bob).tokens_claimed);
     assert_eq!(read_pump(&svm, 0).claims_done, 1, "bob traded, so he counts");
     assert_eq!(lamports(&svm, &ata_address(&bob, &pk.mint)), 0, "no ata created");
+}
+
+#[test]
+fn pump_claim_on_a_launch_nobody_traded() {
+    // the other half of Launch::is_settled(): FROZEN with
+    // sessions_reconciled == sessions_opened, which only happens when nobody
+    // ever bought. The admin freezes a fizzled market, the deposit-only
+    // session reconciles without moving either counter, and the claim still
+    // closes the books.
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let t = setup_pump_table(&mut svm, &px);
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    let alice = t.alice.pubkey();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&alice, 0, &t.ka.pubkey(), LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    // no buy ever priced the curve, so the janitor freeze is the only way out
+    send(&mut svm, &t.admin, &[], &[freeze_launch_ix(&t.admin.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[set_pump_mint_ix(&t.admin.pubkey(), 0, &px.mint, &px.bonding_curve)],
+    )
+    .unwrap();
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&alice, 0)]).unwrap();
+    let l = read_launch(&svm, 0);
+    assert_eq!(l.state, FROZEN, "a never-traded session leaves the state alone");
+    assert_eq!(l.sessions_opened, 0);
+    assert_eq!(l.sessions_reconciled, 0, "0 == 0 is what makes the launch settled");
+
+    let pk = PumpKeys::from(&px);
+    let launch_before = lamports(&svm, &launch_pda(0));
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[pump_claim_ix(&t.admin.pubkey(), &alice, 0, &pk, 0, 0)],
+    )
+    .unwrap();
+    assert!(read_session(&svm, 0, &alice).tokens_claimed, "the books close");
+    assert_eq!(read_pump(&svm, 0).claims_done, 0, "she never traded, so she never counts");
+    assert_eq!(read_launch(&svm, 0).state, FROZEN, "the claim moves no state");
+    assert_eq!(lamports(&svm, &launch_pda(0)), launch_before, "no lamport moved");
+    assert_eq!(lamports(&svm, &ata_address(&alice, &pk.mint)), 0, "no ata created");
 }
 
 #[test]

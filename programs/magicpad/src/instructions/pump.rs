@@ -2,9 +2,8 @@
 //! here are enable_pump (creator, before any trade), set_pump_mint (admin —
 //! the pin of the pump.fun mint the CLI created) and pump_claim (per session
 //! — the vault buys the trader's share on pump.fun). pump_claim is cranked
-//! by the platform admin (the keeper CLI) or by the holder herself, and
-//! waits until the launch has settled. pump_graduate (Task 7) will join
-//! this module.
+//! by the platform admin (the keeper CLI) only, and waits until the launch
+//! has settled. pump_graduate (Task 7) will join this module.
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::{self, AssociatedToken, Create};
 use anchor_spl::token::spl_token::instruction::AuthorityType;
@@ -208,17 +207,14 @@ impl<'info> PumpClaim<'info> {
 }
 
 pub fn pump_claim_handler(ctx: Context<PumpClaim>, amount: u64, max_sol_cost: u64) -> Result<()> {
-    // who may crank: the keeper (platform admin) or the holder herself. A
-    // caller-chosen `amount` is a weapon in a stranger's hands — one token
-    // into the ATA marks tokens_claimed and the real share is gone.
-    // The trader path is a keeper-outage fallback and is unbudgeted (only the
-    // ceiling and the pot guard bind): a self-claim at the ceiling shifts up
-    // to about one holder's rent onto later claimants, bounded by PotTooSmall
-    // — atomic and pre-CPI, so no claim burns; the admin re-cranks the last
-    // holder with a smaller `amount`.
+    // only the keeper (platform admin) cranks. The caller picks `amount` AND
+    // `max_sol_cost`, and the pot guard bounds `max_sol_cost` only by the
+    // whole pot — so any other caller, the holder included, could shortchange
+    // a holder (one token into the ATA marks tokens_claimed and the real
+    // share is gone) or overpay the curve out of the pot. The CLI budgets
+    // every claim.
     require!(
-        ctx.accounts.cranker.key() == ctx.accounts.platform.admin
-            || ctx.accounts.cranker.key() == ctx.accounts.session.trader,
+        ctx.accounts.cranker.key() == ctx.accounts.platform.admin,
         MagicPadError::Unauthorized
     );
     // set_pump_mint accepts a FROZEN launch, so the pin can land while
