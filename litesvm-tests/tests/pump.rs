@@ -429,3 +429,197 @@ fn set_pump_mint_accepts_a_reconciled_launch() {
     .unwrap();
     assert_eq!(read_pump(&svm, 0).pump_mint, px.mint.to_bytes());
 }
+
+// ---- pump_claim -----------------------------------------------------------
+
+/// alice (1.2 SOL deposit) and bob (0.5 SOL deposit). bob buys 0.1 SOL and
+/// sells everything (a loser with sol_spent > 0, tokens_held == 0); alice's
+/// 1.1 SOL buy crosses the line (real_sol_raised += amount_in, trade.rs:123).
+/// Both reconciled, pump mint set.
+fn claim_ready(svm: &mut litesvm::LiteSVM, px: &PumpFixtures) -> (Table, PumpKeys) {
+    let t = setup_pump_table(svm, px);
+    send(svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    send(
+        svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 1_200_000_000)],
+    )
+    .unwrap();
+    send(
+        svm,
+        &t.bob,
+        &[],
+        &[open_trade_session_ix(&t.bob.pubkey(), 0, &t.kb.pubkey(), 500_000_000)],
+    )
+    .unwrap();
+    send(svm, &t.cranker, &[&t.kb], &[buy_ix_pump(&t.kb.pubkey(), &t.bob.pubkey(), 0, 100_000_000)]).unwrap();
+    let held = read_session(svm, 0, &t.bob.pubkey()).tokens_held;
+    send(svm, &t.cranker, &[&t.kb], &[sell_ix(&t.kb.pubkey(), &t.bob.pubkey(), 0, held)]).unwrap();
+    assert_eq!(read_session(svm, 0, &t.bob.pubkey()).tokens_held, 0);
+    send(svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 1_100_000_000)]).unwrap();
+    assert_eq!(read_launch(svm, 0).state, FROZEN);
+    assert_eq!(read_launch(svm, 0).sessions_opened, 2);
+    // losers first, then the winner (same order the keeper uses)
+    send(svm, &t.cranker, &[], &[reconcile_ix(&t.bob.pubkey(), 0)]).unwrap();
+    send(svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 0)]).unwrap();
+    assert_eq!(read_launch(svm, 0).state, RECONCILED);
+    send(
+        svm,
+        &t.admin,
+        &[],
+        &[set_pump_mint_ix(&t.admin.pubkey(), 0, &px.mint, &px.bonding_curve)],
+    )
+    .unwrap();
+    let pk = PumpKeys::from(px);
+    (t, pk)
+}
+
+fn ceiling_of(tokens_held: u64) -> u64 {
+    tokens_held * (10_000 - PUMP_HAIRCUT_BPS) / 10_000
+}
+
+#[test]
+fn pump_claim_buys_the_share_into_the_traders_ata() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = claim_ready(&mut svm, &px);
+    let alice = t.alice.pubkey();
+    let held = read_session(&svm, 0, &alice).tokens_held;
+    assert!(held > 0);
+    let amount = ceiling_of(held) / 2; // well inside the pot
+    let ata = ata_address(&alice, &pk.mint);
+    let vault = pump_vault_pda(0, &alice);
+    let cv = creator_vault_pda(&pk.creator);
+
+    let launch_before = lamports(&svm, &launch_pda(0));
+    let bc_before = lamports(&svm, &px.bonding_curve);
+    let fee_before = lamports(&svm, &pk.fee_recipient);
+    let bb_before = lamports(&svm, &pk.buyback);
+    let cv_before = lamports(&svm, &cv);
+    let cranker_before = lamports(&svm, &t.cranker.pubkey());
+
+    send(
+        &mut svm,
+        &t.cranker,
+        &[],
+        &[pump_claim_ix(&t.cranker.pubkey(), &alice, 0, &pk, amount, 700_000_000)],
+    )
+    .unwrap();
+
+    assert_eq!(token_amount(&svm, &ata), amount, "exact amount in alice's ata");
+    assert_eq!(lamports(&svm, &vault), 0, "vault swept back to the launch");
+    assert_eq!(lamports(&svm, &uva_pda(&vault)), 0, "vault's volume accumulator closed");
+    let s = read_session(&svm, 0, &alice);
+    assert!(s.tokens_claimed);
+    assert_eq!(read_pump(&svm, 0).claims_done, 1);
+    // the launch paid exactly what left the system: curve + fees + creator vault + the ata's rent
+    let spent = launch_before - lamports(&svm, &launch_pda(0));
+    let landed = (lamports(&svm, &px.bonding_curve) - bc_before)
+        + (lamports(&svm, &pk.fee_recipient) - fee_before)
+        + (lamports(&svm, &pk.buyback) - bb_before)
+        + (lamports(&svm, &cv) - cv_before)
+        + lamports(&svm, &ata);
+    assert_eq!(spent, landed, "lamport conservation");
+    // the cranker only paid the tx fee
+    assert!(cranker_before - lamports(&svm, &t.cranker.pubkey()) < 20_000);
+}
+
+#[test]
+fn pump_claim_bookkeeping_for_a_flat_session() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = claim_ready(&mut svm, &px);
+    let bob = t.bob.pubkey();
+    assert_eq!(read_session(&svm, 0, &bob).tokens_held, 0);
+    let launch_before = lamports(&svm, &launch_pda(0));
+    send(
+        &mut svm,
+        &t.cranker,
+        &[],
+        &[pump_claim_ix(&t.cranker.pubkey(), &bob, 0, &pk, 0, 0)],
+    )
+    .unwrap();
+    assert_eq!(lamports(&svm, &launch_pda(0)), launch_before, "no lamport moved");
+    assert!(read_session(&svm, 0, &bob).tokens_claimed);
+    assert_eq!(read_pump(&svm, 0).claims_done, 1, "bob traded, so he counts");
+    assert_eq!(lamports(&svm, &ata_address(&bob, &pk.mint)), 0, "no ata created");
+}
+
+#[test]
+fn pump_claim_two_sessions_complete_the_count() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = claim_ready(&mut svm, &px);
+    let alice = t.alice.pubkey();
+    let amount = ceiling_of(read_session(&svm, 0, &alice).tokens_held) / 2;
+    send(
+        &mut svm,
+        &t.cranker,
+        &[],
+        &[pump_claim_ix(&t.cranker.pubkey(), &alice, 0, &pk, amount, 700_000_000)],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        &t.cranker,
+        &[],
+        &[pump_claim_ix(&t.cranker.pubkey(), &t.bob.pubkey(), 0, &pk, 0, 0)],
+    )
+    .unwrap();
+    assert_eq!(read_pump(&svm, 0).claims_done, read_launch(&svm, 0).sessions_opened);
+}
+
+#[test]
+fn pump_claim_rejections() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = claim_ready(&mut svm, &px);
+    let alice = t.alice.pubkey();
+    let cr = t.cranker.pubkey();
+    let held = read_session(&svm, 0, &alice).tokens_held;
+    let ceiling = ceiling_of(held);
+
+    // more SOL than the pot holds
+    let res = send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&cr, &alice, 0, &pk, ceiling / 2, 2 * LAMPORTS_PER_SOL)]);
+    assert_pad_error(res, E_POT_TOO_SMALL, "max_sol_cost above the pot");
+    // over the haircut ceiling
+    let res = send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&cr, &alice, 0, &pk, ceiling + 1, 700_000_000)]);
+    assert_pad_error(res, E_CLAIM_TOO_LARGE, "ceiling + 1");
+    // a holder with tokens must claim something
+    let res = send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&cr, &alice, 0, &pk, 0, 0)]);
+    assert_pad_error(res, E_BAD_QUOTE, "amount 0 with tokens held");
+    // the ata must be the trader's
+    let mut ix = pump_claim_ix(&cr, &alice, 0, &pk, ceiling / 2, 700_000_000);
+    ix.accounts[7].pubkey = ata_address(&cr, &pk.mint);
+    let res = send(&mut svm, &t.cranker, &[], &[ix]);
+    assert_pad_error(res, E_BAD_PUMP_ACCOUNT, "cranker's ata instead of alice's");
+    // bob (no tokens) may not claim a positive amount
+    let res = send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&cr, &t.bob.pubkey(), 0, &pk, 1, 1_000_000)]);
+    assert_pad_error(res, E_CLAIM_TOO_LARGE, "flat session with amount > 0");
+    // wrong pump mint account
+    let mut ix = pump_claim_ix(&cr, &alice, 0, &pk, ceiling / 2, 700_000_000);
+    ix.accounts[6].pubkey = solana_keypair::Keypair::new().pubkey();
+    let res = send(&mut svm, &t.cranker, &[], &[ix]);
+    assert_pad_error(res, E_WRONG_PUMP_MINT, "mint != pump.pump_mint");
+    // happy path, then a second claim is refused
+    send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&cr, &alice, 0, &pk, ceiling / 2, 700_000_000)]).unwrap();
+    svm.expire_blockhash();
+    let res = send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&cr, &alice, 0, &pk, ceiling / 2, 700_000_000)]);
+    assert_pad_error(res, E_ALREADY_CLAIMED, "second claim");
+}
+
+#[test]
+fn pump_claim_needs_the_mint_and_a_reconciled_session() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let t = frozen_pump_launch(&mut svm, &px);
+    let pk = PumpKeys::from(&px);
+    let alice = t.alice.pubkey();
+    // frozen, not reconciled, mint not set → the mint check fires first (constraint)
+    let res = send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&t.cranker.pubkey(), &alice, 0, &pk, 1, 1_000_000)]);
+    assert_pad_error(res, E_PUMP_MINT_NOT_SET, "before set_pump_mint");
+    send(&mut svm, &t.admin, &[], &[set_pump_mint_ix(&t.admin.pubkey(), 0, &px.mint, &px.bonding_curve)]).unwrap();
+    let res = send(&mut svm, &t.cranker, &[], &[pump_claim_ix(&t.cranker.pubkey(), &alice, 0, &pk, 1, 1_000_000)]);
+    assert_pad_error(res, E_NOT_RECONCILED, "session not reconciled");
+}

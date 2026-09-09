@@ -179,4 +179,8 @@ pub mod magicpad {
     pub fn set_pump_mint(ctx: Context<SetPumpMint>) -> Result<()> {
         set_pump_mint_handler(ctx)
     }
+
+    pub fn pump_claim(ctx: Context<PumpClaim>, amount: u64, max_sol_cost: u64) -> Result<()> {
+        pump_claim_handler(ctx, amount, max_sol_cost)
+    }
 }
