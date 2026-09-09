@@ -112,7 +112,7 @@ pub const PUMP_FEE_PROGRAM: Pubkey = pubkey!("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchM
 | `enable_pump(launch_id)` | L1 | `launch.creator` | `init` PumpLaunch. Requires `launch.state == BONDING`, `real_sol_raised == 0`. Must be bundled in the create tx **before** `delegate_launch` (after delegation the Launch is DLP-owned and cannot pass `Account<Launch>`). |
 | `buy` (existing) | ER | session key | Gains `pump: Option<Account<PumpLaunch>>`. Threshold = `PUMP_GRADUATION_LAMPORTS` when `Some`, else `GRADUATION_LAMPORTS`. Nothing else changes. The ER clones the non-delegated PDA read-only (Platform precedent in `freeze_launch`). |
 | `set_pump_mint(mint)` | L1 | admin | Once. Requires `launch.state ∈ {FROZEN, RECONCILED}`, `pump_mint == default`, and pump `bonding_curve` (`["bonding-curve", mint]` under pump) deserialises with `creator == launch.creator` and `complete == false`. Stores `pump_mint`. |
-| `pump_claim(amount, max_sol_cost)` | L1 | anyone (cranker) | Replaces `claim_tokens` for pump launches. See flow below. |
+| `pump_claim(amount, max_sol_cost)` | L1 | admin or the trader | Replaces `claim_tokens` for pump launches. Not a permissionless crank: caller-chosen `amount` means a stranger could shortchange a holder — one token into the ATA marks `tokens_claimed` and the real share is gone. See flow below. |
 | `pump_graduate(amount, max_sol_cost)` | L1 | admin | Requires every traded session claimed or bookkept (`claims_done == sessions_reconciled`, `sessions_reconciled == sessions_opened`, `state ∈ {FROZEN, RECONCILED}`). `amount > 0`: flip pot + pot dust → launch vault → pump `buy` into the vault's own ATA → `burn` → close the ATA → close the accumulator → vault residue back to the launch. `amount == 0`: no buy (the CLI passes 0 when the pot is under the 0.01 SOL floor — rent would eat it). Either way the launch is then swept to rent-minimum with the remainder to the platform PDA, the Mooner mint authority is revoked (supply is 0), `state = GRADUATED`. |
 
 `claim_tokens` and `graduate` (the two instructions that mint the Mooner
@@ -156,8 +156,9 @@ program-id sentinel the program reads as None.
 
 ### `pump_claim` flow
 
-Accounts: cranker (S, pays tx fee only), trader (unchecked, pinned to
-`session.trader`), launch (mut — pot debits), pump_launch (mut),
+Accounts: cranker (S, pays tx fee only), platform (readonly; admin check —
+`cranker == platform.admin || cranker == session.trader`), trader (unchecked,
+pinned to `session.trader`), launch (mut — pot debits), pump_launch (mut),
 session (mut), vault (mut, system-owned PDA `["pumpvault", launch_id, trader]`),
 trader_ata (mut; the trader's canonical ATA for `pump_mint`, created inside the
 instruction by the ATA program with **the vault as payer** — `invoke_signed`), the
@@ -167,7 +168,13 @@ instruction by the ATA program with **the vault as payer** — `invoke_signed`),
 Args: `amount: u64` (tokens to buy, from the crank's per-holder budget),
 `max_sol_cost: u64` (from the crank's live quote plus slack). Both bounded below.
 
-1. `require!(session.reconciled && !session.tokens_claimed)`. If
+1. `require!(launch.state == RECONCILED)` first — `set_pump_mint` may land on
+   a FROZEN launch, but claims must not start until every winner has been paid
+   out of the pot (`pot_available` reserves nothing for an unreconciled winner,
+   whose `reconcile_trade_session` would then fail `PotNotReady` forever).
+   Then `require!(session.reconciled && !session.tokens_claimed)` — the
+   session-level check stays reachable, for a session that never traded and so
+   was never counted in `sessions_opened`. If
    `tokens_held == 0` (a session that fully exited during bonding): mark
    `tokens_claimed`, `claims_done += 1`, return — no vault, no CPI. This is what
    lets `pump_graduate`'s `claims_done == sessions_reconciled` gate close.
@@ -216,7 +223,8 @@ Platform tax: **waived** in pump mode (`config.launch_tax_bps` not applied). The
 
 `PumpMode` (Meteora ix on a pump launch), `NotPumpMode`, `PumpMintNotSet`,
 `PumpMintAlreadySet`, `PumpCreatorMismatch`, `PumpCurveComplete`, `PotTooSmall`,
-`PumpClaimsOutstanding`.
+`PumpClaimsOutstanding`, `LaunchNotReconciled` (a claim on a launch whose
+sessions have not all settled).
 
 ## CLI — `scripts/migrate-pump.mjs`
 
