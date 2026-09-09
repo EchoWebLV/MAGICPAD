@@ -33,7 +33,7 @@ const PUMP = sdk.PUMP_PROGRAM_ID;
 const PFEE = sdk.PUMP_FEE_PROGRAM_ID;
 const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 // upgradeable-loader programdata account = PDA([program_id], loader)
-const programdata = (p) => PublicKey.findProgramAddressSync([p.toBuffer()], LOADER)[0];
+const programdataOf = (p) => PublicKey.findProgramAddressSync([p.toBuffer()], LOADER)[0];
 // SDK's CURRENT_FEE_RECIPIENTS_FOR_BUYBACK[0]; a mainnet simulate with it returned err=null
 const BUYBACK = new PublicKey('5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD');
 const ELF_HEADER = 45; // UpgradeableLoaderState::ProgramData header before the ELF bytes
@@ -80,12 +80,12 @@ async function dumpAccount(address, file) {
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  await dumpProgram(programdata(PUMP), 'pump.so');
-  await dumpProgram(programdata(PFEE), 'pfee.so');
+  await dumpProgram(programdataOf(PUMP), 'pump.so');
+  await dumpProgram(programdataOf(PFEE), 'pfee.so');
   await dumpAccount(sdk.GLOBAL_PDA, 'global.acct');
   // pump rejects a buyback recipient that is not in Global's list; the list can rotate upstream
   const globalBytes = fs.readFileSync(path.join(OUT, 'global.acct'));
-  if (globalBytes.indexOf(BUYBACK.toBuffer()) === -1) throw new Error(`BUYBACK ${BUYBACK.toBase58()} is not in the captured global account — update the pin from the SDK's CURRENT_FEE_RECIPIENTS_FOR_BUYBACK`);
+  if (globalBytes.indexOf(BUYBACK.toBuffer()) === -1) throw new Error(`BUYBACK ${BUYBACK.toBase58()} is not in the captured global account — pick one of Global.buyback_fee_recipients (decode global.acct with sdk.pumpIdl, or grep CURRENT_FEE_RECIPIENTS_FOR_BUYBACK in @pump-fun/pump-sdk/dist/index.js)`);
   await dumpAccount(sdk.PUMP_FEE_CONFIG_PDA, 'fee_config.acct');
   await dumpAccount(sdk.GLOBAL_VOLUME_ACCUMULATOR_PDA, 'gva.acct');
 
