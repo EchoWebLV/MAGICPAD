@@ -133,7 +133,7 @@ sessions UI-born, and `freeze_launch` is the admin recovery.
 ### `pump_claim` flow
 
 Accounts: cranker (S, pays tx fee only), trader (unchecked, pinned to
-`session.trader`), platform, launch (mut — pot debits), pump_launch (mut),
+`session.trader`), launch (mut — pot debits), pump_launch (mut),
 session (mut), vault (mut, system-owned PDA `["pumpvault", launch_id, trader]`),
 trader_ata (mut; the trader's canonical ATA for `pump_mint`, created inside the
 instruction by the ATA program with **the vault as payer** — `invoke_signed`), the
