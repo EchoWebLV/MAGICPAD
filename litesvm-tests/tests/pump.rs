@@ -80,6 +80,7 @@ fn enable_pump_works_on_a_fair_launch() {
     let t = setup_table(&mut svm);
     send(&mut svm, &t.creator, &[], &[create_launch_fair_ix(&t.creator.pubkey(), 1, "FAIREST", "FAIR")]).unwrap();
     send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 1)]).unwrap();
+    assert!(read_launch(&svm, 1).flip_pot >= 0, "launch 1 must really be fairest (-1 = standard)");
     let p = read_pump(&svm, 1);
     assert_eq!(p.launch_id, 1);
     assert_eq!(p.pump_mint, [0u8; 32]);
