@@ -21,9 +21,42 @@ signed by a unique PDA, never via a transfer or airdrop.
   SOL** (system transfer) and rent for `user_volume_accumulator`
   (`["user_volume_accumulator", user]`). Errors `BuyNotEnoughSolToCoverRent` /
   `BuyNotEnoughSolToCoverFees` exist → `user` must be a **system-owned** account.
+- **`buy` takes 18 accounts** (verified byte-for-byte against `@pump-fun/pump-sdk@1.36.0`
+  and a mainnet `simulateTransaction`, `err: null`): `global`(ro), `fee_recipient`(W),
+  `mint`(ro), `bonding_curve`(W), `associated_bonding_curve`(W), `associated_user`(W),
+  `user`(W,S), system program, token program (`Tokenkeg…`), `creator_vault`(W)
+  (`["creator-vault", creator]`), `__event_authority`(ro)
+  `Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1`, pump program(ro),
+  `global_volume_accumulator`(ro) `Hq2wp8uJ9jCPsYgNHex8RtqdvMPfVGoYwjvF1ATiwn2Y`,
+  `user_volume_accumulator`(W), `fee_config`(ro)
+  `8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt`, fee program(ro), then two
+  *remaining* accounts the IDL does not list: `bonding_curve_v2`(ro)
+  (`["bonding-curve-v2", mint]` under pump — uninitialised for a v1 coin) and
+  `buyback_fee_recipient`(W), one of eight fixed addresses hard-coded in the SDK.
+  Omit either → error 6062 `BuybackFeeRecipientMissing`. Data = discriminator
+  `[102,6,61,18,1,218,235,234]` ‖ `amount: u64 LE` ‖ `max_sol_cost: u64 LE` ‖ `0x01`
+  (`track_volume = Some(true)`, 25 bytes). `buy` CPIs the fee program
+  (`GetFees`), so a local SVM needs **both** ELFs.
+- **`associated_user` may be owned by a wallet other than `user`** (mainnet sim
+  `err: null`): the PDA vault pays, the tokens land straight in the trader's own
+  canonical ATA. No `SetAuthority` hand-off is needed.
+- `close_user_volume_accumulator` (discriminator `[249,69,164,218,150,103,84,138]`,
+  accounts `user`(W,S), `user_volume_accumulator`(W), `__event_authority`, pump program)
+  succeeds in the same transaction right after `buy` and returns the accumulator's
+  rent to `user`.
 - Live `fee_config` (`["fee_config", pump_program]` under
-  `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ`): **125 bps** on every tier
+  `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ`): one tier, **125 bps**
   (95 protocol + 30 creator). `Global.creatorFeeBasisPoints = 5` is superseded.
+- Mainnet rent is **6,333 lamports × (128 + data_len)** (measured; not litesvm's
+  default): trader ATA (165 B) 1,855,569 — permanent, paid per holder;
+  `user_volume_accumulator` (137 B) 1,678,245 — fronted, recovered by the close;
+  `creator_vault` (0 B) 810,624 — pump tops it up out of the first buy for that
+  creator. The program reads `Rent::get()`; nothing is hard-coded.
+- v1 `create` (14 accounts, classic Token program) costs 19,389,173 lamports of
+  rent + fees and ≈104k CU on mainnet; `create_v2` mints Token-2022 with
+  `ImmutableOwner` ATAs and is **not** used. `create` + ATA + `buy` +
+  `close_user_volume_accumulator` ≈ 221k CU → every CLI transaction sets a
+  400k CU limit.
 - Pump curve constants == Mooner's: virtual 30 SOL / 1.073e15, real 793.1T, supply
   1e15, 6 decimals. Constant-product ⇒ SOL raised determines tokens sold
   (path-independent), so replaying Mooner's final ledger onto a fresh pump curve
@@ -33,7 +66,9 @@ signed by a unique PDA, never via a transfer or airdrop.
 
 ## Non-goals
 
-- No change to standard (Meteora) launches, `keeper.mjs`, or the 85 SOL threshold.
+- No change to standard (Meteora) launches or the 85 SOL threshold. `keeper.mjs`
+  keeps committing/absorbing/reconciling pump launches and only skips their
+  claim/graduate/migrate steps; `migrate.mjs` skips them.
 - No browser-side self-crank of pump claims (CLI cranks; the web shows status).
 - No creator dev-buy on pump; the Mooner creator first-buy rule is unchanged.
 
@@ -76,8 +111,8 @@ pub const PUMP_FEE_PROGRAM: Pubkey = pubkey!("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchM
 | `enable_pump(launch_id)` | L1 | `launch.creator` | `init` PumpLaunch. Requires `launch.state == BONDING`, `real_sol_raised == 0`. Must be bundled in the create tx **before** `delegate_launch` (after delegation the Launch is DLP-owned and cannot pass `Account<Launch>`). |
 | `buy` (existing) | ER | session key | Gains `pump: Option<Account<PumpLaunch>>`. Threshold = `PUMP_GRADUATION_LAMPORTS` when `Some`, else `GRADUATION_LAMPORTS`. Nothing else changes. The ER clones the non-delegated PDA read-only (Platform precedent in `freeze_launch`). |
 | `set_pump_mint(mint)` | L1 | admin | Once. Requires `launch.state ∈ {FROZEN, RECONCILED}`, `pump_mint == default`, and pump `bonding_curve` (`["bonding-curve", mint]` under pump) deserialises with `creator == launch.creator` and `complete == false`. Stores `pump_mint`. |
-| `pump_claim` | L1 | anyone (cranker) | Replaces `claim_tokens` for pump launches. See flow below. |
-| `pump_graduate` | L1 | admin | Requires every traded session claimed or bookkept (`claims_done == sessions_reconciled`, `sessions_reconciled == sessions_opened`, `state ∈ {FROZEN, RECONCILED}`). Flip pot + pot dust → launch vault → pump `buy` → `burn` the received tokens (skip when pot < a 0.01 SOL floor: rent would eat it; sweep to platform instead). Revokes the Mooner mint authority (supply is 0). `state = GRADUATED`. |
+| `pump_claim(amount, max_sol_cost)` | L1 | anyone (cranker) | Replaces `claim_tokens` for pump launches. See flow below. |
+| `pump_graduate(amount, max_sol_cost)` | L1 | admin | Requires every traded session claimed or bookkept (`claims_done == sessions_reconciled`, `sessions_reconciled == sessions_opened`, `state ∈ {FROZEN, RECONCILED}`). `amount > 0`: flip pot + pot dust → launch vault → pump `buy` into the vault's own ATA → `burn` → close the ATA → close the accumulator → vault residue back to the launch. `amount == 0`: no buy (the CLI passes 0 when the pot is under the 0.01 SOL floor — rent would eat it). Either way the launch is then swept to rent-minimum with the remainder to the platform PDA, the Mooner mint authority is revoked (supply is 0), `state = GRADUATED`. |
 
 `claim_tokens` and `graduate` (the two instructions that mint the Mooner
 supply) gain a **required** `pump: UncheckedAccount` constrained to the
@@ -99,38 +134,56 @@ sessions UI-born, and `freeze_launch` is the admin recovery.
 
 Accounts: cranker (S, pays tx fee only), trader (unchecked, pinned to
 `session.trader`), platform, launch (mut — pot debits), pump_launch (mut),
-session (mut), vault (mut, system-owned PDA), vault_token_account (mut; the
-vault's ATA for `pump_mint`, created by the cranker via ATA program in the same
-tx **with the vault as payer** — see rent), pump accounts (global,
-fee_recipient, mint, bonding_curve, associated_bonding_curve, creator_vault,
-event_authority, pump program, global_volume_accumulator,
-user_volume_accumulator, fee_config, fee_program), token/ata/system programs.
+session (mut), vault (mut, system-owned PDA `["pumpvault", launch_id, trader]`),
+trader_ata (mut; the trader's canonical ATA for `pump_mint`, created inside the
+instruction by the ATA program with **the vault as payer** — `invoke_signed`), the
+18 pump `buy` accounts listed under hard facts (with `user = vault`,
+`associated_user = trader_ata`), token/ata/system programs.
 
-Args: `max_sol_cost: u64` (from the crank's live quote; bounded below).
+Args: `amount: u64` (tokens to buy, from the crank's per-holder budget),
+`max_sol_cost: u64` (from the crank's live quote plus slack). Both bounded below.
 
 1. `require!(session.reconciled && !session.tokens_claimed)`. If
    `tokens_held == 0` (a session that fully exited during bonding): mark
    `tokens_claimed`, `claims_done += 1`, return — no vault, no CPI. This is what
    lets `pump_graduate`'s `claims_done == sessions_reconciled` gate close.
-2. `amount = tokens_held * (10_000 - PUMP_HAIRCUT_BPS) / 10_000`.
-3. `require!(max_sol_cost <= pot_available)` where `pot_available = launch.lamports - rent_min - flip_pot` (the flip pot is reserved for `pump_graduate`).
-4. Lamports `launch → vault`: `max_sol_cost + RENT_ALLOWANCE` (ATA rent 2_039_280 + user_volume_accumulator rent; the exact accumulator size is read in the spike and hard-coded as a constant).
-5. CPI pump `buy(amount, max_sol_cost, track_volume = false)` with `user = vault`, seeds `["pumpvault", launch_id, trader, bump]`.
-6. CPI SPL `set_authority(vault_token_account, AccountOwner → trader)`, authority = vault (signed).
-7. Sweep vault residue (`max_sol_cost` slack + unused allowance) back to the launch pot via signed system transfer; vault ends at 0 lamports.
-8. `session.tokens_claimed = true; pump_launch.claims_done += 1`.
+2. `require!(0 < amount <= tokens_held * (10_000 - PUMP_HAIRCUT_BPS) / 10_000)` —
+   the on-chain ceiling; nobody can be handed more than their ledger share.
+3. `allowance = rent(165) + rent(137) + rent(0)` (trader ATA, accumulator, creator
+   vault top-up), all from `Rent::get()`. `need = max_sol_cost + allowance`.
+   `require!(need <= pot_available)` where `pot_available = launch.lamports -
+   rent_min(launch) - max(flip_pot, 0)` (the flip pot is reserved for
+   `pump_graduate`); error `PotTooSmall`.
+4. Lamports `launch → vault`: `need` (direct lamport move; the launch is
+   program-owned).
+5. CPI ATA `create_idempotent(trader_ata, payer = vault, owner = trader)` signed
+   with `["pumpvault", launch_id, trader, bump]`.
+6. CPI pump `buy(amount, max_sol_cost, Some(true))` with `user = vault`,
+   `associated_user = trader_ata`, same signer seeds.
+7. If `user_volume_accumulator` is non-empty: CPI pump
+   `close_user_volume_accumulator(user = vault)` — its rent returns to the vault.
+8. Sweep the vault to zero back to the launch via a signed system transfer.
+9. `session.tokens_claimed = true; pump_launch.claims_done += 1`.
 
-Why this is safe in any crank order: buying `0.985 × tokens_sold` in aggregate on
-the fresh pump curve costs `≤ 0.985 × 1.0125 × real_sol_raised = 0.9973 × raise`
-(cost is convex with cost(0)=0), so the pot always covers every claim. Order only
-changes which holder's fill deviates from `tokens_held` by up to the 3.3% curve
-move; the CLI cranks in ascending average cost (`cost_basis / tokens_held`) so
-the earliest Mooner buyers buy first on pump and fills track the ledger.
+The trader ends with exactly `amount` tokens in their own ATA (pump fills the
+token side exactly; only the SOL cost varies with order), no SOL back (their
+deposit remainder already walked home in `reconcile_trade_session`), and the only
+funder in their ATA's history is a one-off PDA that never held tokens.
 
-Rent: the vault pays its own ATA + accumulator rent out of the pot allowance, so
-the keeper never appears as a funder of any holder's account. Net effect per
-holder: `amount` tokens, no SOL back (their deposit remainder already walked home
-in `reconcile_trade_session`).
+**Who picks `amount`.** The program enforces the ceiling and the pot guard; the
+CLI chooses the size so the pot covers every holder in any order: before each
+claim it reads the live pot and pump curve, gives the holder
+`budget = pot_available × tokens_held / Σ tokens_held(unclaimed)`, subtracts the
+permanent rent (ATA, plus the creator-vault top-up while that vault is below
+rent-minimum) and 0.5 % slack, quotes tokens for what is left with the pump
+SDK, and takes `min(ceiling, quote)`. Aggregate cost of buying `0.985 ×
+tokens_sold` on the fresh pump curve is `≤ 0.985 × 1.0125 × raise` (cost is
+convex with cost(0) = 0), so the budget rule only bites by the per-holder rent —
+about 1.9 M lamports each on a 1 SOL raise. Cranking in ascending average cost
+(`cost_basis / tokens_held`) puts the earliest Mooner buyers first on pump.
+
+Rent: the vault pays the ATA and the accumulator out of the pot allowance, so
+the keeper never appears as a funder of any holder's account.
 
 Platform tax: **waived** in pump mode (`config.launch_tax_bps` not applied). The
 62 bps on 1 SOL is 0.0062 SOL; the crank's tx fees exceed it.
@@ -149,20 +202,27 @@ and skips what already landed; **never** creates a second pump token for a launc
 whose `pump_mint` is set.
 
 ```
-node scripts/migrate-pump.mjs            # every FROZEN/RECONCILED pump launch
-node scripts/migrate-pump.mjs 7          # one launch id
-node scripts/migrate-pump.mjs --dry      # per-holder amounts + quotes, send nothing
+node scripts/migrate-pump.mjs 7            # dry run (default): the CA, per-holder amounts + quotes; sends nothing
+node scripts/migrate-pump.mjs 7 --confirm  # sends — the operator runs this by hand, never an agent
 ```
 
-Steps per launch: (1) ensure sessions committed + reconciled (reuse keeper's
-reconcile helper), (2) pump `create` — name/symbol from the Launch, `uri` from the
-Mooner Metaplex metadata account (`metadata.rs` already pinned it), mint keypair
-persisted to `scripts/pump-mints/<launch_id>.json` **before** sending, `creator =
-launch.creator`, (3) `set_pump_mint`, (4) `pump_claim` per session in ascending
-avg-cost order, `max_sol_cost` from a live quote against pump's bonding curve and
-fee tiers with 0.5% slack, (5) `pump_graduate`, (6) append to
-`scripts/migrations.json` (`{ kind: "pump", mint, ... }`, mirrored to
-`apps/web/public/migrations.json`).
+Steps per launch: (1) require every session reconciled (`sessions_reconciled ==
+sessions_opened` — the keeper's job; the CLI refuses otherwise), (2) pump v1
+`create` via `@pump-fun/pump-sdk` (CommonJS `require` — its ESM entry breaks on
+`@coral-xyz/anchor`) — name/symbol from the Launch, `uri` = the launch's IPFS
+metadata JSON resolved from the creation-tx memo CID (`GATEWAY + cid`, the same
+lookup the web's `metadata.ts` does), mint keypair generated and persisted to
+`scripts/pump-mints/<launch_id>.json` **before** sending so the CA is known first,
+`creator = launch.creator`, `user` = keeper; (3) `set_pump_mint`; (4) `pump_claim`
+per session in ascending avg-cost order with `amount` from the budget rule above
+and `max_sol_cost` = the session's pro-rata budget (the quote is taken at
+budget − 0.5%, so the cap has headroom); sessions with `sol_spent > 0` and
+`tokens_held == 0` get the bookkeeping claim (`amount = 0`); sessions that never
+bought (`sol_spent == 0`) are skipped — `sessions_opened` never counted them; (5) `pump_graduate` with the pot quote, or
+`amount = 0` when the pot is under 0.01 SOL; (6) append to
+`scripts/migrations.json` (`{ kind: "pump", pumpMint, ... }`, mirrored to
+`apps/web/public/migrations.json`). Every transaction: CU limit 400k + CU price
+(`CU_PRICE`, default 50k µlamports).
 
 ## Web (`apps/web`)
 
@@ -178,25 +238,35 @@ fee tiers with 0.5% slack, (5) `pump_graduate`, (6) append to
 
 ## Testing (`litesvm-tests`)
 
-Fixtures dumped from mainnet into `litesvm-tests/fixtures/` (gitignored, fetched by
-`scripts/dump-pump-fixtures.sh`): pump program, `pfee…` program, mpl-token-metadata
-program, and accounts `Global`, `FeeConfig`, `GlobalVolumeAccumulator`,
-`__event_authority`.
+Fixtures dumped from mainnet into `litesvm-tests/fixtures/` (gitignored, written
+by `scripts/dump-pump-fixtures.mjs`): the pump and `pfee…` program ELFs
+(`ProgramData` minus its 45-byte header — both are upgradeable-loader programs),
+accounts `Global`, `FeeConfig`, `GlobalVolumeAccumulator`, and — captured from a
+mainnet `simulateTransaction` of a v1 `create` for a fixture mint keypair with a
+fixture creator keypair — the post-create `mint`, `bonding_curve` and
+`associated_bonding_curve`. Tests therefore never run pump `create` or Metaplex;
+the program only ever CPIs `buy` and `close_user_volume_accumulator`. Tests
+warp the clock to the capture time (the volume accumulator has a time window).
+Missing fixtures → the pump tests print how to dump them and return without
+asserting.
 
-1. **Spike (first task, gates everything):** in litesvm, a PDA `user` funded by
-   system transfer CPIs pump `buy` successfully, and `SetAuthority(AccountOwner)`
-   moves the classic-token ATA to another owner. Records the
-   `user_volume_accumulator` rent. Fallback if (a) fails: per-holder *keypair*
-   vault generated by the crank (no transfer edges, but a keeper funded-by edge) —
-   requires a design revision, not a silent switch.
-2. Lifecycle: 3 sessions (buy-and-hold, flipper taxed in fairest mode, net winner
-   who fully exited), crossing buy at 1 SOL freezes; reconcile conservation to the
-   lamport; `set_pump_mint` rejects a mint whose creator ≠ launch.creator; claims
-   in any order all succeed; each fill within `[amount − 3.3%, amount]` of
-   `tokens_held × 0.985`; double claim rejected; `pump_graduate` refused while a
-   claim is outstanding; pot buy-and-burn leaves the launch at rent-min; Mooner
-   mint supply 0 with no authority; `claim_tokens`/`graduate` refused with
-   `PumpMode`.
+1. **Spike (first task, gates everything):** in litesvm with the fixtures, a
+   funded keypair `user` buys with `associated_user` = a *different* wallet's ATA,
+   then closes its volume accumulator; the accumulator rent returns to `user`.
+   Records the measured rent numbers against
+   `svm.minimum_balance_for_rent_exemption`. Fallback if the pump ELF does not
+   load or the foreign-owner buy fails: a design revision, not a silent switch.
+2. Lifecycle: launch created with the fixture creator, a buy-and-hold session
+   and a flat one (bought, then sold everything), plus a fairest launch where an
+   instant flip is taxed into the pot — a claim cannot reach the pot, graduation
+   spends it; crossing buy at 1 SOL freezes; reconcile conservation to the lamport; `set_pump_mint` rejects a
+   mint whose creator ≠ launch.creator; claims in any order all succeed with each
+   holder receiving exactly `amount` tokens in their own ATA; the vault ends at 0
+   lamports and the launch's lamport drop equals curve + fees + ATA rent (+ the
+   creator-vault top-up) — conservation; the ceiling and the pot guard reject;
+   double claim rejected; `pump_graduate` refused while a claim is outstanding;
+   pot buy-and-burn leaves the launch at rent-min; Mooner mint supply 0 with no
+   authority; `claim_tokens`/`graduate` refused with `PumpMode`.
 3. Existing 34 litesvm + 18 unit tests stay green (the optional `buy` account
    defaults to `None`).
 
