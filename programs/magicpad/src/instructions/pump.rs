@@ -1,13 +1,16 @@
-//! pump.fun mode. The PumpLaunch PDA is the switch; the three instructions
+//! pump.fun mode. The PumpLaunch PDA is the switch; the four instructions
 //! here are enable_pump (creator, before any trade), set_pump_mint (admin —
-//! the pin of the pump.fun mint the CLI created) and pump_claim (per session
-//! — the vault buys the trader's share on pump.fun). pump_claim is cranked
-//! by the platform admin (the keeper CLI) only, and waits until the launch
-//! has settled. pump_graduate (Task 7) will join this module.
+//! the pin of the pump.fun mint the CLI created), pump_claim (per session —
+//! a vault buys the trader's share on pump.fun straight into their ATA) and
+//! pump_graduate (once every claim is in — a launch-level vault spends what
+//! is left of the pot on one more buy, burns it, and the launch's residue
+//! goes to the platform while the never-minted Mooner mint is sealed). Both
+//! cranks are the platform admin's (the keeper CLI) alone, and both wait
+//! until the launch has settled.
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::{self, AssociatedToken, Create};
 use anchor_spl::token::spl_token::instruction::AuthorityType;
-use anchor_spl::token::{self, Burn, CloseAccount, Mint, SetAuthority, Token, TokenAccount};
+use anchor_spl::token::{self, Burn, CloseAccount, Mint, SetAuthority, Token};
 
 use super::pump_vault::{
     claim_allowance, fund_vault, pot_available, sweep_vault, vault_buys, PumpSide, VaultBuy,
@@ -301,6 +304,225 @@ pub fn pump_claim_handler(ctx: Context<PumpClaim>, amount: u64, max_sol_cost: u6
     if s.sol_spent > 0 {
         let p = &mut ctx.accounts.pump;
         p.claims_done = p.claims_done.checked_add(1).ok_or(MagicPadError::Overflow)?;
+    }
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct PumpGraduate<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [PLATFORM_SEED],
+        bump = platform.bump,
+        constraint = platform.admin == admin.key() @ MagicPadError::Unauthorized,
+    )]
+    pub platform: Box<Account<'info, Platform>>,
+    #[account(mut, seeds = [LAUNCH_SEED, launch.id.to_le_bytes().as_ref()], bump = launch.bump)]
+    pub launch: Box<Account<'info, Launch>>,
+    #[account(
+        mut,
+        seeds = [PUMP_SEED, launch.id.to_le_bytes().as_ref()],
+        bump = pump.bump,
+        constraint = pump.pump_mint != Pubkey::default() @ MagicPadError::PumpMintNotSet,
+        constraint = pump.pump_mint == pump_mint.key() @ MagicPadError::WrongPumpMint,
+    )]
+    pub pump: Box<Account<'info, PumpLaunch>>,
+    /// the Mooner mint — authority revoked at the end, supply stays 0
+    #[account(
+        mut,
+        seeds = [MINT_SEED, launch.id.to_le_bytes().as_ref()],
+        bump,
+        constraint = mint.key() == launch.mint @ MagicPadError::WrongLaunch,
+    )]
+    pub mint: Box<Account<'info, Mint>>,
+    /// CHECK: the launch-level signing vault for the burn buy
+    #[account(mut, seeds = [PUMP_VAULT_SEED, launch.id.to_le_bytes().as_ref()], bump)]
+    pub vault: UncheckedAccount<'info>,
+    /// CHECK: vault's ATA for pump_mint — created, filled, burnt, closed within this ix
+    #[account(mut)]
+    pub vault_ata: UncheckedAccount<'info>,
+    /// CHECK: equals pump.pump_mint (constraint above); mutable because burn touches supply
+    #[account(mut)]
+    pub pump_mint: UncheckedAccount<'info>,
+    // ---- pump.fun's own accounts; pump validates each of them ----
+    /// CHECK: pump global
+    pub pump_global: UncheckedAccount<'info>,
+    /// CHECK: pump fee recipient
+    #[account(mut)]
+    pub pump_fee_recipient: UncheckedAccount<'info>,
+    /// CHECK: pump bonding curve
+    #[account(mut)]
+    pub pump_bonding_curve: UncheckedAccount<'info>,
+    /// CHECK: bonding curve's ATA
+    #[account(mut)]
+    pub pump_associated_bonding_curve: UncheckedAccount<'info>,
+    /// CHECK: creator vault
+    #[account(mut)]
+    pub pump_creator_vault: UncheckedAccount<'info>,
+    /// CHECK: pump event authority
+    pub pump_event_authority: UncheckedAccount<'info>,
+    /// CHECK: pump program
+    #[account(address = pump_cpi::PUMP_PROGRAM @ MagicPadError::BadPumpAccount)]
+    pub pump_program: UncheckedAccount<'info>,
+    /// CHECK: global volume accumulator
+    pub pump_global_volume_accumulator: UncheckedAccount<'info>,
+    /// CHECK: the VAULT's user volume accumulator
+    #[account(mut)]
+    pub pump_user_volume_accumulator: UncheckedAccount<'info>,
+    /// CHECK: fee config
+    pub pump_fee_config: UncheckedAccount<'info>,
+    /// CHECK: pump fee program
+    #[account(address = pump_cpi::PUMP_FEE_PROGRAM @ MagicPadError::BadPumpAccount)]
+    pub pump_fee_program: UncheckedAccount<'info>,
+    /// CHECK: bonding curve v2
+    pub pump_bonding_curve_v2: UncheckedAccount<'info>,
+    /// CHECK: buyback fee recipient
+    #[account(mut)]
+    pub pump_buyback_fee_recipient: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+impl<'info> PumpGraduate<'info> {
+    /// A deliberate copy of `PumpClaim::side()`: the two Accounts structs are
+    /// distinct types over identically named fields, and a macro or a trait
+    /// to share thirteen field borrows would hide more than it saves.
+    fn side<'a>(&'a self) -> PumpSide<'a, 'info> {
+        PumpSide {
+            global: &self.pump_global,
+            fee_recipient: &self.pump_fee_recipient,
+            bonding_curve: &self.pump_bonding_curve,
+            associated_bonding_curve: &self.pump_associated_bonding_curve,
+            creator_vault: &self.pump_creator_vault,
+            event_authority: &self.pump_event_authority,
+            pump_program: &self.pump_program,
+            global_volume_accumulator: &self.pump_global_volume_accumulator,
+            user_volume_accumulator: &self.pump_user_volume_accumulator,
+            fee_config: &self.pump_fee_config,
+            fee_program: &self.pump_fee_program,
+            bonding_curve_v2: &self.pump_bonding_curve_v2,
+            buyback_fee_recipient: &self.pump_buyback_fee_recipient,
+        }
+    }
+}
+
+pub fn pump_graduate_handler(ctx: Context<PumpGraduate>, amount: u64, max_sol_cost: u64) -> Result<()> {
+    let l = &ctx.accounts.launch;
+    require!(l.is_settled(), MagicPadError::NotGraduatable);
+    require!(
+        ctx.accounts.pump.claims_done == l.sessions_opened,
+        MagicPadError::PumpClaimsOutstanding
+    );
+
+    let launch_ai = ctx.accounts.launch.to_account_info();
+    let id_bytes = ctx.accounts.launch.id.to_le_bytes();
+    let vault_bump = [ctx.bumps.vault];
+    let vault_seeds: &[&[u8]] = &[PUMP_VAULT_SEED, &id_bytes, &vault_bump];
+    let vault = ctx.accounts.vault.to_account_info();
+
+    if amount > 0 {
+        // the remainder becomes pump.fun liquidity and the tokens are destroyed:
+        // buy into the vault's own ATA, burn, close the ATA, sweep the vault
+        let pump_mint_ai = ctx.accounts.pump_mint.to_account_info();
+        let vault_ata_ai = ctx.accounts.vault_ata.to_account_info();
+        let system_ai = ctx.accounts.system_program.to_account_info();
+        let token_ai = ctx.accounts.token_program.to_account_info();
+        require_keys_eq!(
+            ctx.accounts.vault_ata.key(),
+            anchor_spl::associated_token::get_associated_token_address(
+                &vault.key(),
+                &ctx.accounts.pump_mint.key(),
+            ),
+            MagicPadError::BadPumpAccount
+        );
+        let need = max_sol_cost.checked_add(claim_allowance()?).ok_or(MagicPadError::Overflow)?;
+        // the flip pot is spendable here (it is what graduation burns) — only
+        // the launch's own rent is off limits, hence flip_pot = 0
+        require!(need <= pot_available(&launch_ai, 0)?, MagicPadError::PotTooSmall);
+        fund_vault(&launch_ai, &vault, &system_ai, vault_seeds, need)?;
+        associated_token::create_idempotent(CpiContext::new_with_signer(
+            ctx.accounts.associated_token_program.key(),
+            Create {
+                payer: vault.clone(),
+                associated_token: vault_ata_ai.clone(),
+                authority: vault.clone(),
+                mint: pump_mint_ai.clone(),
+                system_program: system_ai.clone(),
+                token_program: token_ai.clone(),
+            },
+            &[vault_seeds],
+        ))?;
+        vault_buys(
+            &VaultBuy {
+                side: ctx.accounts.side(),
+                mint: &pump_mint_ai,
+                associated_user: &vault_ata_ai,
+                vault: &vault,
+                system_program: &system_ai,
+                token_program: &token_ai,
+            },
+            vault_seeds,
+            amount,
+            max_sol_cost,
+        )?;
+        token::burn(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Burn {
+                    mint: pump_mint_ai.clone(),
+                    from: vault_ata_ai.clone(),
+                    authority: vault.clone(),
+                },
+                &[vault_seeds],
+            ),
+            amount,
+        )?;
+        token::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            CloseAccount {
+                account: vault_ata_ai.clone(),
+                destination: vault.clone(),
+                authority: vault.clone(),
+            },
+            &[vault_seeds],
+        ))?;
+        sweep_vault(&vault, &launch_ai, &system_ai, vault_seeds)?;
+    }
+
+    // the Mooner mint never minted; lock it so it never can
+    let bump = [ctx.accounts.platform.bump];
+    let seeds: &[&[u8]] = &[PLATFORM_SEED, &bump];
+    token::set_authority(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            SetAuthority {
+                current_authority: ctx.accounts.platform.to_account_info(),
+                account_or_mint: ctx.accounts.mint.to_account_info(),
+            },
+            &[seeds],
+        ),
+        AuthorityType::MintTokens,
+        None,
+    )?;
+
+    ctx.accounts.launch.state = LAUNCH_GRADUATED;
+
+    // residue (incl. the flip pot — there is no Meteora seed to ship it with)
+    // → platform. LAST on purpose: a program-owned account's lamports move by
+    // direct arithmetic, and the runtime only learns of such a move for the
+    // accounts the NEXT CPI names. set_authority names the platform but not
+    // the launch, so a residue moved before it would enter that CPI as an
+    // unexplained credit (`UnbalancedInstruction`). Nothing follows this, so
+    // the instruction simply ends with its books square.
+    let rent_min = Rent::get()?.minimum_balance(launch_ai.data_len());
+    let residue = launch_ai.lamports().saturating_sub(rent_min);
+    if residue > 0 {
+        let platform_ai = ctx.accounts.platform.to_account_info();
+        **launch_ai.try_borrow_mut_lamports()? -= residue;
+        **platform_ai.try_borrow_mut_lamports()? += residue;
     }
     Ok(())
 }

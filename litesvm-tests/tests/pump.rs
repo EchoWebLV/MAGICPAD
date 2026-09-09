@@ -857,3 +857,135 @@ fn pump_claim_waits_for_the_launch_to_reconcile() {
     assert_pad_error(res, E_LAUNCH_NOT_RECONCILED, "a settled session on an unsettled launch");
     assert!(!read_session(&svm, 0, &bob).tokens_claimed, "nothing was booked");
 }
+
+// ---- pump_graduate --------------------------------------------------------
+
+/// claim_ready + both claims done
+fn all_claimed(svm: &mut litesvm::LiteSVM, px: &PumpFixtures) -> (Table, PumpKeys) {
+    let (t, pk) = claim_ready(svm, px);
+    let alice = t.alice.pubkey();
+    let amount = ceiling_of(read_session(svm, 0, &alice).tokens_held) / 2;
+    send(svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &alice, 0, &pk, amount, 700_000_000)]).unwrap();
+    send(svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &t.bob.pubkey(), 0, &pk, 0, 0)]).unwrap();
+    assert_eq!(read_pump(svm, 0).claims_done, 2);
+    (t, pk)
+}
+
+#[test]
+fn pump_graduate_burns_the_remainder_and_revokes_the_mint() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = all_claimed(&mut svm, &px);
+    let vault = pump_launch_vault_pda(0);
+    let vault_ata = ata_address(&vault, &pk.mint);
+    let supply_before = mint_supply(&svm, &pk.mint);
+    let platform_before = lamports(&svm, &platform_pda());
+    let amount = 5_000_000_000_000u64; // 5M tokens
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, amount, 300_000_000)],
+    )
+    .unwrap();
+    let l = read_launch(&svm, 0);
+    assert_eq!(l.state, GRADUATED);
+    let rent_min = svm.minimum_balance_for_rent_exemption(svm.get_account(&launch_pda(0)).unwrap().data.len());
+    assert_eq!(lamports(&svm, &launch_pda(0)), rent_min, "launch keeps only its rent");
+    assert!(lamports(&svm, &platform_pda()) > platform_before, "residue went to the platform");
+    assert_eq!(mint_supply(&svm, &pk.mint), supply_before - amount, "bought tokens were burnt");
+    assert_eq!(lamports(&svm, &vault_ata), 0, "vault ata closed");
+    assert_eq!(lamports(&svm, &vault), 0, "vault swept");
+    assert_eq!(mint_authority_opt(&svm, &mint_pda(0)), None, "Mooner mint revoked");
+}
+
+#[test]
+fn pump_graduate_with_zero_amount_only_settles() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = all_claimed(&mut svm, &px);
+    let supply_before = mint_supply(&svm, &pk.mint);
+    let platform_before = lamports(&svm, &platform_pda());
+    let launch_before = lamports(&svm, &launch_pda(0));
+    send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 0)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, GRADUATED);
+    assert_eq!(mint_supply(&svm, &pk.mint), supply_before, "no buy, no burn");
+    let rent_min = svm.minimum_balance_for_rent_exemption(svm.get_account(&launch_pda(0)).unwrap().data.len());
+    assert_eq!(lamports(&svm, &platform_pda()) - platform_before, launch_before - rent_min);
+    assert_eq!(mint_authority_opt(&svm, &mint_pda(0)), None);
+}
+
+#[test]
+fn pump_graduate_spends_the_flip_pot_of_a_fairest_launch() {
+    // launch 1 is fairest: bob's instant flip is taxed into flip_pot. A claim
+    // must not reach into the pot; graduation spends it.
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let t = setup_pump_table(&mut svm, &px);
+    send(&mut svm, &t.creator, &[], &[create_launch_fair_ix(&t.creator.pubkey(), 1, "FAIREST", "FAIR")]).unwrap();
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 1)]).unwrap();
+    send(&mut svm, &t.alice, &[], &[open_trade_session_ix(&t.alice.pubkey(), 1, &t.ka.pubkey(), 1_500_000_000)]).unwrap();
+    send(&mut svm, &t.bob, &[], &[open_trade_session_ix(&t.bob.pubkey(), 1, &t.kb.pubkey(), 500_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix_pump(&t.kb.pubkey(), &t.bob.pubkey(), 1, 200_000_000)]).unwrap();
+    let held = read_session(&svm, 1, &t.bob.pubkey()).tokens_held;
+    // same clock as the buy → age zero → the full 25% rate (fair.rs precedent)
+    send(&mut svm, &t.cranker, &[&t.kb], &[sell_ix(&t.kb.pubkey(), &t.bob.pubkey(), 1, held)]).unwrap();
+    let tax = read_launch(&svm, 1).flip_pot;
+    assert!(tax > 0, "the flip was taxed into the pot");
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 1, 1_100_000_000)]).unwrap();
+    assert_eq!(read_launch(&svm, 1).state, FROZEN);
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.bob.pubkey(), 1)]).unwrap();
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 1)]).unwrap();
+    assert_eq!(read_launch(&svm, 1).state, RECONCILED);
+    assert_eq!(read_launch(&svm, 1).flip_pot, tax, "reconcile leaves the pot alone");
+    send(&mut svm, &t.admin, &[], &[set_pump_mint_ix(&t.admin.pubkey(), 1, &px.mint, &px.bonding_curve)]).unwrap();
+    let pk = PumpKeys::from(&px);
+
+    let rent_min = svm.minimum_balance_for_rent_exemption(svm.get_account(&launch_pda(1)).unwrap().data.len());
+    let allowance = svm.minimum_balance_for_rent_exemption(165)
+        + svm.minimum_balance_for_rent_exemption(137)
+        + svm.minimum_balance_for_rent_exemption(0);
+    // what a claim may spend: everything above rent EXCEPT the pot
+    let free = lamports(&svm, &launch_pda(1)) - rent_min - tax as u64;
+    let alice = t.alice.pubkey();
+    let amount = ceiling_of(read_session(&svm, 1, &alice).tokens_held) / 4;
+    let res = send(&mut svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &alice, 1, &pk, amount, free - allowance + 1)]);
+    assert_pad_error(res, E_POT_TOO_SMALL, "a claim cannot reach into the flip pot");
+    send(&mut svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &alice, 1, &pk, amount, free / 2)]).unwrap();
+    send(&mut svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &t.bob.pubkey(), 1, &pk, 0, 0)]).unwrap();
+    assert_eq!(read_launch(&svm, 1).flip_pot, tax, "claims leave the pot alone");
+
+    // graduation may spend the pot: a cap that only fits WITH the pot passes
+    let with_pot = lamports(&svm, &launch_pda(1)) - rent_min - allowance;
+    assert!(with_pot > lamports(&svm, &launch_pda(1)) - rent_min - allowance - tax as u64);
+    let supply_before = mint_supply(&svm, &pk.mint);
+    let g_amount = 1_000_000_000_000u64; // 1M tokens: well under what `with_pot` buys on a fresh curve
+    send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 1, &pk, g_amount, with_pot)]).unwrap();
+    assert_eq!(read_launch(&svm, 1).state, GRADUATED);
+    assert_eq!(lamports(&svm, &launch_pda(1)), rent_min, "pot and dust both left the launch");
+    assert_eq!(mint_supply(&svm, &pk.mint), supply_before - g_amount, "bought tokens were burnt");
+}
+
+#[test]
+fn pump_graduate_rejections() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = claim_ready(&mut svm, &px);
+    // claims outstanding
+    let res = send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 0)]);
+    assert_pad_error(res, E_PUMP_CLAIMS_OUTSTANDING, "nobody claimed yet");
+    let alice = t.alice.pubkey();
+    let amount = ceiling_of(read_session(&svm, 0, &alice).tokens_held) / 2;
+    send(&mut svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &alice, 0, &pk, amount, 700_000_000)]).unwrap();
+    send(&mut svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &t.bob.pubkey(), 0, &pk, 0, 0)]).unwrap();
+    // non-admin
+    let res = send(&mut svm, &t.alice, &[], &[pump_graduate_ix(&t.alice.pubkey(), 0, &pk, 0, 0)]);
+    assert_pad_error(res, E_UNAUTHORIZED, "alice is not admin");
+    // pot too small for the burn buy
+    let res = send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 1_000_000_000_000, 5 * LAMPORTS_PER_SOL)]);
+    assert_pad_error(res, E_POT_TOO_SMALL, "5 SOL max on a ~0.3 SOL remainder");
+    send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 0)]).unwrap();
+    svm.expire_blockhash();
+    let res = send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 0)]);
+    assert_pad_error(res, E_NOT_GRADUATABLE, "already graduated");
+}

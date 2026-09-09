@@ -183,4 +183,8 @@ pub mod magicpad {
     pub fn pump_claim(ctx: Context<PumpClaim>, amount: u64, max_sol_cost: u64) -> Result<()> {
         pump_claim_handler(ctx, amount, max_sol_cost)
     }
+
+    pub fn pump_graduate(ctx: Context<PumpGraduate>, amount: u64, max_sol_cost: u64) -> Result<()> {
+        pump_graduate_handler(ctx, amount, max_sol_cost)
+    }
 }
