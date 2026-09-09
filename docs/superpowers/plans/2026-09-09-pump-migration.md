@@ -97,7 +97,7 @@ anchor-lang = { version = "=1.0.2", features = ["init-if-needed", "allow-missing
 ```
 
 Run: `anchor build 2>&1 | tail -3`
-Expected: ends with the IDL line (`Writing idl to ...` or equivalent) and no `error`. If cargo reports the feature does not exist, stop — the plan depends on `anchor-lang` 1.0.2 exposing `allow-missing-optionals` (verified in `~/.cargo/registry/src/*/anchor-lang-1.0.2/Cargo.toml`).
+Expected: exit code 0 and no `error` in the output (anchor-cli 0.31.1 prints no "Writing idl" line — confirm the build by `target/idl/magicpad.json`'s mtime being fresh). If cargo reports the feature does not exist, stop — the plan depends on `anchor-lang` 1.0.2 exposing `allow-missing-optionals` (verified in `~/.cargo/registry/src/*/anchor-lang-1.0.2/Cargo.toml`).
 
 - [ ] **Step 3: Add the pump SDK and the CLI script entry**
 
@@ -259,7 +259,7 @@ Run: `RPC_URL=<mainnet rpc> node scripts/dump-pump-fixtures.mjs` (use the mainne
 Expected: nine `...:` lines, `pump.so: 10485715 bytes` (10,485,760 − 45), `pfee.so: 948944 bytes`, then `meta.txt written · ...`.
 
 Run: `ls litesvm-tests/fixtures && git status --short litesvm-tests`
-Expected: 12 files listed; `git status` prints nothing for `litesvm-tests` (ignored).
+Expected: 11 files listed (pump.so, pfee.so, global.acct, fee_config.acct, gva.acct, mint.acct, bonding_curve.acct, associated_bonding_curve.acct, creator-keypair.json, mint-keypair.json, meta.txt); `git status` prints nothing for `litesvm-tests` (ignored).
 
 - [ ] **Step 6: Confirm the baseline still passes**
 
