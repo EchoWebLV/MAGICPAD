@@ -721,9 +721,15 @@ pub struct Table {
 }
 
 pub fn setup_table(svm: &mut LiteSVM) -> Table {
+    setup_table_with_creator(svm, Keypair::new())
+}
+
+/// the same table with a caller-chosen launch creator (pump tests need the
+/// fixture creator so pump's bonding curve matches launch.creator)
+pub fn setup_table_with_creator(svm: &mut LiteSVM, creator: Keypair) -> Table {
     let t = Table {
         admin: Keypair::new(),
-        creator: Keypair::new(),
+        creator,
         alice: Keypair::new(),
         bob: Keypair::new(),
         ka: Keypair::new(),

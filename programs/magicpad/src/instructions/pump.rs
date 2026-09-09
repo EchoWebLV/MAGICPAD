@@ -60,6 +60,8 @@ pub struct SetPumpMint<'info> {
         constraint = platform.admin == admin.key() @ MagicPadError::Unauthorized,
     )]
     pub platform: Box<Account<'info, Platform>>,
+    /// Typed `Account<>` on purpose: the owner check means the launch must be
+    /// home (`commit_launch` undelegated it) before the admin can pin.
     #[account(seeds = [LAUNCH_SEED, launch.id.to_le_bytes().as_ref()], bump = launch.bump)]
     pub launch: Box<Account<'info, Launch>>,
     #[account(
@@ -89,8 +91,10 @@ pub fn set_pump_mint_handler(ctx: Context<SetPumpMint>) -> Result<()> {
     require!(p.pump_mint == Pubkey::default(), MagicPadError::PumpMintAlreadySet);
     let head = pump_cpi::parse_bonding_curve(&ctx.accounts.pump_bonding_curve.try_borrow_data()?)
         .ok_or(MagicPadError::BadPumpAccount)?;
-    // the pump token must be OURS (creator = launch creator) and still on its curve
-    require!(head.creator == l.creator && !head.complete, MagicPadError::BadPumpAccount);
+    // the pump token must be OURS (creator = launch creator) …
+    require!(head.creator == l.creator, MagicPadError::BadPumpAccount);
+    // … and still on its curve (a completed curve refuses buys; the pin is one-shot)
+    require!(!head.complete, MagicPadError::BadPumpAccount);
     p.pump_mint = ctx.accounts.pump_mint.key();
     Ok(())
 }

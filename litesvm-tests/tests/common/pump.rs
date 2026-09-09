@@ -201,20 +201,7 @@ pub fn load_pump(svm: &mut LiteSVM) -> Option<PumpFixtures> {
 /// setup_table, but the launch creator IS the fixture creator so pump's
 /// bonding curve (creator = fixture creator) matches launch.creator.
 pub fn setup_pump_table(svm: &mut LiteSVM, px: &PumpFixtures) -> super::Table {
-    use super::{create_launch_ix, init_platform_ix, send, GRADUATION_LAMPORTS};
-    let admin = Keypair::new();
-    let creator = px.creator_keypair();
-    let alice = Keypair::new();
-    let bob = Keypair::new();
-    let ka = Keypair::new();
-    let kb = Keypair::new();
-    let cranker = Keypair::new();
-    for k in [&admin, &creator, &alice, &bob, &cranker] {
-        svm.airdrop(&k.pubkey(), 2 * GRADUATION_LAMPORTS + 10 * LAMPORTS_PER_SOL).unwrap();
-    }
-    send(svm, &admin, &[], &[init_platform_ix(&admin.pubkey())]).unwrap();
-    send(svm, &creator, &[], &[create_launch_ix(&creator.pubkey(), 0, "DARKPAD", "DARK")]).unwrap();
-    super::Table { admin, creator, alice, bob, ka, kb, cranker }
+    super::setup_table_with_creator(svm, px.creator_keypair())
 }
 
 /// pump.fun bonding curve, raw offsets (spec: BondingCurve layout). The IDL

@@ -393,3 +393,39 @@ fn set_pump_mint_rejects_a_curve_that_is_not_pumps() {
     );
     assert_pad_error(res, E_BAD_PUMP_ACCOUNT, "curve address != derivation for mint");
 }
+
+#[test]
+fn set_pump_mint_rejects_a_completed_curve() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let t = frozen_pump_launch(&mut svm, &px);
+    // flip pump's `complete` flag (offset 48, see pump_cpi.rs) on the captured curve
+    let mut acc = svm.get_account(&px.bonding_curve).expect("bonding curve");
+    acc.data[48] = 1;
+    svm.set_account(px.bonding_curve, acc).unwrap();
+    let res = send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[set_pump_mint_ix(&t.admin.pubkey(), 0, &px.mint, &px.bonding_curve)],
+    );
+    assert_pad_error(res, E_BAD_PUMP_ACCOUNT, "curve already complete");
+}
+
+#[test]
+fn set_pump_mint_accepts_a_reconciled_launch() {
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let t = frozen_pump_launch(&mut svm, &px);
+    // alice is the only session, so one reconcile completes the count
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 0)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, RECONCILED);
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[set_pump_mint_ix(&t.admin.pubkey(), 0, &px.mint, &px.bonding_curve)],
+    )
+    .unwrap();
+    assert_eq!(read_pump(&svm, 0).pump_mint, px.mint.to_bytes());
+}
