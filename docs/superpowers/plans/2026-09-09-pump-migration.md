@@ -3476,6 +3476,13 @@ No litesvm test covers this task; the check is `tsc --noEmit` + `next build` + a
 Run: `anchor build 2>&1 | grep -E "^error"; cp target/idl/magicpad.json apps/web/lib/idl-v3.json && node -e "const i=require('./apps/web/lib/idl-v3.json'); console.log(i.accounts.map(a=>a.name).join(',')); const b=i.instructions.find(x=>x.name==='buy').accounts.find(a=>a.name==='pump'); console.log('buy.pump optional =', b && b.optional === true)"`
 Expected: no errors; the list includes `PumpLaunch`; `buy.pump optional = true`. That flag is load-bearing: Anchor's JS resolver turns `pump: null` into the program-id sentinel ONLY when the IDL account says `optional: true`; without it `null` yields no entry, the resolver derives the PDA, and every non-pump buy fails 3012. (`idl-v3.json` is what the web speaks on mainnet; the devnet IDL stays untouched.)
 
+While the IDL is regenerated anyway (Task 5 review follow-up): `BadPumpAccount`'s
+`#[msg]` in `programs/magicpad/src/error.rs` reads "pump account does not match its
+derivation", but `set_pump_mint` returns it for five different refusals (owner,
+derivation, undecodable curve, creator mismatch, curve complete). Widen the message
+to "pump account failed a derivation, owner, creator or completion check" in the same
+commit; the code (6031) does not change, so no client breaks.
+
 - [ ] **Step 2: `core.ts` — the constants and the PDA**
 
 After
