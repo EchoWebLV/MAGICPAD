@@ -56,6 +56,11 @@ fn pump_buy_lands_in_a_foreign_ata_and_uva_closes() {
     let after = read_bonding_curve(&svm, &px.mint);
     assert_eq!(after.real_token_reserves, before.real_token_reserves - amount);
     assert!(lamports(&svm, &px.bonding_curve) > bc_lamports_before, "SOL entered the curve");
+    assert!(after.real_sol_reserves > before.real_sol_reserves, "curve bookkeeping moved");
+    assert!(
+        svm.get_account(&ata_address(&user.pubkey(), &px.mint)).is_none(),
+        "the signer got no ATA of its own — the tokens went to the foreign one"
+    );
 
     // track_volume=true opened a user_volume_accumulator; closing refunds its rent
     let uva = uva_pda(&user.pubkey());

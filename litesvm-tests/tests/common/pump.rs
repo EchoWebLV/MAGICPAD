@@ -1,6 +1,7 @@
 //! pump.fun under litesvm: mainnet ELFs + accounts captured by
 //! scripts/dump-pump-fixtures.mjs into ../fixtures (gitignored). Every
 //! pump-dependent test calls `load_pump` and returns early on None.
+//! Set PUMP_FIXTURES_REQUIRED=1 to make a missing capture fail instead of skip (the pre-merge command).
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -81,9 +82,14 @@ impl PumpFixtures {
     }
 }
 
+fn read_bytes(path: &Path) -> Vec<u8> {
+    fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
 /// .acct = owner(32) ‖ lamports u64 LE ‖ data
 fn read_acct(path: &Path) -> Account {
-    let b = fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let b = read_bytes(path);
+    assert!(b.len() >= 40, "{}: {} bytes, need owner(32)+lamports(8)", path.display(), b.len());
     Account {
         lamports: u64::from_le_bytes(b[32..40].try_into().unwrap()),
         data: b[40..].to_vec(),
@@ -101,15 +107,20 @@ fn read_keypair(path: &Path) -> Keypair {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .split(',')
-        .map(|s| s.trim().parse::<u8>().expect("keypair byte"))
+        .map(|s| {
+            s.trim()
+                .parse::<u8>()
+                .unwrap_or_else(|e| panic!("{}: bad keypair byte {s:?}: {e}", path.display()))
+        })
         .collect();
     assert_eq!(bytes.len(), 64, "{}: expected 64 bytes", path.display());
     Keypair::try_from(&bytes[..]).unwrap()
 }
 
 /// Loads pump + pfee and the captured accounts into `svm`, funds the fee
-/// wallets, and warps the clock to capture time. None (with a notice) when
-/// the fixtures are absent — callers `return` and the test counts as passed.
+/// wallets, and warps the clock to capture time. None when the fixtures are
+/// absent (the notice only shows under --nocapture; set PUMP_FIXTURES_REQUIRED
+/// to fail instead) — callers `return` and the test counts as passed.
 pub fn load_pump(svm: &mut LiteSVM) -> Option<PumpFixtures> {
     let dir = fixtures_dir();
     let meta_path = dir.join("meta.txt");
@@ -118,9 +129,13 @@ pub fn load_pump(svm: &mut LiteSVM) -> Option<PumpFixtures> {
             "pump fixtures missing at {} — run `node scripts/dump-pump-fixtures.mjs` (mainnet RPC); skipping",
             dir.display()
         );
+        if std::env::var_os("PUMP_FIXTURES_REQUIRED").is_some() {
+            panic!("PUMP_FIXTURES_REQUIRED is set and {} is missing", meta_path.display());
+        }
         return None;
     }
-    let meta = fs::read_to_string(&meta_path).unwrap();
+    let meta = fs::read_to_string(&meta_path)
+        .unwrap_or_else(|e| panic!("{}: {e}", meta_path.display()));
     let get = |key: &str| -> String {
         meta.lines()
             .find_map(|l| l.strip_prefix(&format!("{key}=")))
@@ -129,8 +144,8 @@ pub fn load_pump(svm: &mut LiteSVM) -> Option<PumpFixtures> {
             .to_string()
     };
 
-    svm.add_program(pump_id(), &fs::read(dir.join("pump.so")).unwrap()).unwrap();
-    svm.add_program(pfee_id(), &fs::read(dir.join("pfee.so")).unwrap()).unwrap();
+    svm.add_program(pump_id(), &read_bytes(&dir.join("pump.so"))).unwrap();
+    svm.add_program(pfee_id(), &read_bytes(&dir.join("pfee.so"))).unwrap();
     for (file, addr) in [
         ("global.acct", global_pda()),
         ("fee_config.acct", fee_config_pda()),
@@ -139,7 +154,7 @@ pub fn load_pump(svm: &mut LiteSVM) -> Option<PumpFixtures> {
         svm.set_account(addr, read_acct(&dir.join(file))).unwrap();
     }
 
-    let mint: Address = get("mint").parse().unwrap();
+    let mint: Address = get("mint").parse().unwrap_or_else(|e| panic!("meta.txt mint: {e:?}"));
     let bonding_curve = bonding_curve_pda(&mint);
     let associated_bonding_curve = ata_address(&bonding_curve, &mint);
     svm.set_account(mint, read_acct(&dir.join("mint.acct"))).unwrap();
@@ -147,13 +162,25 @@ pub fn load_pump(svm: &mut LiteSVM) -> Option<PumpFixtures> {
     svm.set_account(associated_bonding_curve, read_acct(&dir.join("associated_bonding_curve.acct")))
         .unwrap();
 
-    let fee_recipient: Address = get("fee_recipient").parse().unwrap();
-    let buyback: Address = get("buyback_fee_recipient").parse().unwrap();
+    let fee_recipient: Address = get("fee_recipient")
+        .parse()
+        .unwrap_or_else(|e| panic!("meta.txt fee_recipient: {e:?}"));
+    let buyback: Address = get("buyback_fee_recipient")
+        .parse()
+        .unwrap_or_else(|e| panic!("meta.txt buyback_fee_recipient: {e:?}"));
     // pump transfers fees into these; they must exist rent-exempt
     svm.airdrop(&fee_recipient, LAMPORTS_PER_SOL).unwrap();
     svm.airdrop(&buyback, LAMPORTS_PER_SOL).unwrap();
 
-    let captured_at: i64 = get("captured_at").parse().unwrap();
+    let captured_at: i64 = get("captured_at")
+        .parse()
+        .unwrap_or_else(|e| panic!("meta.txt captured_at: {e:?}"));
+    // Overwrites the clock: call load_pump BEFORE any other warp_to. Keeps
+    // timestamps at capture time (litesvm boots at unix 0). Not load-bearing
+    // for this capture — without it the buy still passes — because this
+    // capture's volume-accumulator window is 0..=0 (start_time, end_time and
+    // seconds_in_a_day in gva.acct are all 0); kept so a capture that does
+    // carry a real window still replays at the time it was taken.
     warp_to(svm, captured_at);
 
     let creator = read_keypair(&dir.join("creator-keypair.json"));
@@ -170,7 +197,9 @@ pub fn load_pump(svm: &mut LiteSVM) -> Option<PumpFixtures> {
     })
 }
 
-/// pump.fun bonding curve, raw offsets (spec: BondingCurve layout)
+/// pump.fun bonding curve, raw offsets (spec: BondingCurve layout). The IDL
+/// names the reserves *_quote_reserves; on a SOL-quoted curve they are SOL.
+/// Bytes 81.. (is_mayhem_mode, is_cashback_coin, quote_mint) are not read.
 #[derive(Debug, Clone, Copy)]
 pub struct BondingCurveView {
     pub virtual_token_reserves: u64,
@@ -184,6 +213,8 @@ pub struct BondingCurveView {
 
 pub fn read_bonding_curve(svm: &LiteSVM, mint: &Address) -> BondingCurveView {
     let d = svm.get_account(&bonding_curve_pda(mint)).expect("bonding curve").data;
+    const DISC: [u8; 8] = [23, 183, 248, 55, 96, 216, 172, 96];
+    assert_eq!(&d[..8], &DISC, "not a pump BondingCurve account");
     let u = |at: usize| u64::from_le_bytes(d[at..at + 8].try_into().unwrap());
     BondingCurveView {
         virtual_token_reserves: u(8),
@@ -277,8 +308,8 @@ pub struct PumpKeys {
     pub buyback: Address,
 }
 
-impl PumpKeys {
-    pub fn from(px: &PumpFixtures) -> PumpKeys {
+impl From<&PumpFixtures> for PumpKeys {
+    fn from(px: &PumpFixtures) -> PumpKeys {
         PumpKeys {
             mint: px.mint,
             creator: px.creator.pubkey(),
