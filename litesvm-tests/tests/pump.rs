@@ -1276,3 +1276,29 @@ fn claim_tokens_and_graduate_refuse_pump_launches() {
     let res = send(&mut svm, &t.admin, &[], &[graduate_ix(&t.admin.pubkey(), 0)]);
     assert_pad_error(res, E_PUMP_MODE, "graduate on a pump launch");
 }
+
+#[test]
+fn graduate_refuses_a_pump_launch_that_raised_the_meteora_line() {
+    // One 85 SOL buy is legal on a pump launch — the 1 SOL line only says
+    // when the market freezes, not how far a single buy may overshoot — and
+    // it lands real_sol_raised exactly on GRADUATION_LAMPORTS. Every other
+    // check in graduate passes here, so the marker guard is the only thing
+    // between this pot and the admin's sweep.
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), GRADUATION_LAMPORTS + LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, GRADUATION_LAMPORTS)]).unwrap();
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 0)]).unwrap();
+    let l = read_launch(&svm, 0);
+    assert_eq!(l.state, RECONCILED);
+    assert_eq!(l.real_sol_raised, GRADUATION_LAMPORTS);
+    let res = send(&mut svm, &t.admin, &[], &[graduate_ix(&t.admin.pubkey(), 0)]);
+    assert_pad_error(res, E_PUMP_MODE, "graduate on a pump launch at the Meteora line");
+}

@@ -571,7 +571,10 @@ const ata = (owner: PublicKey, mint: PublicKey) =>
 
 /** Permissionless crank: mint the ledger claim into the trader's ATA.
  *  v3 (mainnet) also reads the pump marker — it must be empty; the devnet
- *  program predates it. */
+ *  program predates it. The marker is a REQUIRED account, so it only
+ *  reaches the wire once idl-v3.json is regenerated (Task 10) — Anchor
+ *  drops keys the IDL does not list — and the program upgrade and the web
+ *  deploy ship together. */
 export async function claimTokens(wallet: WalletLike, id: number, trader: PublicKey): Promise<string> {
   const mint = mintPda(id);
   const ix = await program.methods.claimTokens().accountsPartial({

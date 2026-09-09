@@ -119,10 +119,14 @@ pub const PUMP_FEE_PROGRAM: Pubkey = pubkey!("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchM
 supply) gain a **required** `pump: UncheckedAccount` constrained to the
 `["pump", launch_id]` address and `require!(pump.data_is_empty())` → error
 `PumpMode`. An optional account would be no guard at all (omit it and the
-Mooner mint gets minted on a pump launch). `lock_mint` needs no guard (supply is
-0, it fails on its own check); `record_pool` is harmless. Callers of
-`claim_tokens`/`graduate` (`keeper.mjs`, `migrate.mjs`, `fill-graduate.mjs`,
-web `claimTokens`, the canary scripts' pinned IDLs) add the one address.
+Mooner mint gets minted on a pump launch). `lock_mint` needs no guard (supply
+is 0, it fails on its own check); `record_pool` (admin-only, `init`-only,
+requires GRADUATED) carries no guard either: an admin could pin a
+`MigratedPool` record on a pump launch's zero-supply Mooner mint. The keeper
+no longer routes pump launches to `migrate.mjs` (Task 8), so it stays an open
+item rather than a guard. Callers of `claim_tokens`/`graduate` (`keeper.mjs`,
+`migrate.mjs`, `fill-graduate.mjs`, web `claimTokens`, the canary scripts'
+pinned IDLs) add the one address.
 `pump_claim`/`pump_graduate` require the PDA to exist.
 
 `buy`'s `pump` account stays *optional* (`None` for standard launches — passing
