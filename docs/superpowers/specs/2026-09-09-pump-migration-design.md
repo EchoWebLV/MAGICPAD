@@ -112,7 +112,7 @@ pub const PUMP_FEE_PROGRAM: Pubkey = pubkey!("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchM
 | `enable_pump(launch_id)` | L1 | `launch.creator` | `init` PumpLaunch. Requires `launch.state == BONDING`, `real_sol_raised == 0`. Must be bundled in the create tx **before** `delegate_launch` (after delegation the Launch is DLP-owned and cannot pass `Account<Launch>`). |
 | `buy` (existing) | ER | session key | Gains `pump: Option<Account<PumpLaunch>>`. Threshold = `PUMP_GRADUATION_LAMPORTS` when `Some`, else `GRADUATION_LAMPORTS`. Nothing else changes. The ER clones the non-delegated PDA read-only (Platform precedent in `freeze_launch`). |
 | `set_pump_mint(mint)` | L1 | admin | Once. Requires `launch.state ∈ {FROZEN, RECONCILED}`, `pump_mint == default`, and pump `bonding_curve` (`["bonding-curve", mint]` under pump) deserialises with `creator == launch.creator` and `complete == false`. Stores `pump_mint`. |
-| `pump_claim(amount, max_sol_cost)` | L1 | admin or the trader | Replaces `claim_tokens` for pump launches. Not a permissionless crank: caller-chosen `amount` means a stranger could shortchange a holder — one token into the ATA marks `tokens_claimed` and the real share is gone. See flow below. |
+| `pump_claim(amount, max_sol_cost)` | L1 | admin (keeper CLI) | Replaces `claim_tokens` for pump launches. Not a permissionless crank: caller-chosen `amount` means a stranger could shortchange a holder — one token into the ATA marks `tokens_claimed` and the real share is gone — and `max_sol_cost` is bounded only by the whole pot, so no self-service path exists either: the holder cranking herself could overpay the curve out of everyone's pot. See flow below. |
 | `pump_graduate(amount, max_sol_cost)` | L1 | admin | Requires every traded session claimed or bookkept (`claims_done == sessions_opened`, `sessions_reconciled == sessions_opened`, `state ∈ {FROZEN, RECONCILED}`). `amount > 0`: flip pot + pot dust → launch vault → pump `buy` into the vault's own ATA → `burn` → close the ATA → close the accumulator → vault residue back to the launch. `amount == 0`: no buy (the CLI passes 0 when the pot is under the 0.01 SOL floor — rent would eat it). Either way the launch is then swept to rent-minimum with the remainder to the platform PDA, the Mooner mint authority is revoked (supply is 0), `state = GRADUATED`. |
 
 `claim_tokens` and `graduate` (the two instructions that mint the Mooner
@@ -156,8 +156,8 @@ program-id sentinel the program reads as None.
 
 ### `pump_claim` flow
 
-Accounts: cranker (S, pays tx fee only), platform (readonly; admin check —
-`cranker == platform.admin || cranker == session.trader`), trader (unchecked,
+Accounts: cranker (S, the platform admin; pays tx fee only), platform
+(readonly; admin check — `cranker == platform.admin`), trader (unchecked,
 pinned to `session.trader`), launch (mut — pot debits), pump_launch (mut),
 session (mut), vault (mut, system-owned PDA `["pumpvault", launch_id, trader]`),
 trader_ata (mut; the trader's canonical ATA for `pump_mint`, created inside the
@@ -170,17 +170,17 @@ Args: `amount: u64` (tokens to buy, from the crank's per-holder budget),
 
 1. `require!(launch.is_settled())` first (RECONCILED, or FROZEN with
    `sessions_reconciled == sessions_opened`, which only happens when nobody
-   traded) — `set_pump_mint` may land on a
-   FROZEN launch, but claims must not start until every winner has been paid
-   out of the pot (`pot_available` reserves nothing for an unreconciled winner,
-   whose `reconcile_trade_session` would then fail `PotNotReady` forever).
-   Then `require!(session.reconciled && !session.tokens_claimed)` — the
-   session-level check stays reachable, for a session that never traded and so
-   was never counted in `sessions_opened`. If
+   traded) — `set_pump_mint` may land on a FROZEN launch, but claims must not
+   start until every winner has been paid out of the pot (`pot_available`
+   reserves nothing for an unreconciled winner, whose `reconcile_trade_session`
+   would then fail `PotNotReady` forever). Then `require!(session.reconciled &&
+   !session.tokens_claimed)` — the session-level check stays reachable, for a
+   session that never traded and so was never counted in `sessions_opened`. If
    `tokens_held == 0` (a session that fully exited during bonding): mark
-   `tokens_claimed`; bump `claims_done` **only if `sol_spent > 0`** (a session
-   that deposited but never traded is not in `sessions_opened` and must not be
-   counted); return — no vault, no CPI. This is what lets `pump_graduate`'s
+   `tokens_claimed` (`amount` must be 0, else `ClaimTooLarge`); bump
+   `claims_done` **only if `sol_spent > 0`** (a session that deposited but never
+   traded is not in `sessions_opened` and must not be counted); return — no
+   vault, no CPI. This is what lets `pump_graduate`'s
    `claims_done == sessions_opened` gate close.
 2. `require!(0 < amount <= tokens_held * (10_000 - PUMP_HAIRCUT_BPS) / 10_000)` —
    the on-chain ceiling; nobody can be handed more than their ledger share.
@@ -217,13 +217,9 @@ tokens_sold` on the fresh pump curve is `≤ 0.985 × 1.0125 × raise` (cost is
 convex with cost(0) = 0), so the budget rule only bites by the per-holder rent —
 about 1.9 M lamports each on a 1 SOL raise. Cranking in ascending average cost
 (`cost_basis / tokens_held`) puts the earliest Mooner buyers first on pump.
-The trader path is a keeper-outage fallback and is **unbudgeted** — the program
-enforces only the ceiling and the pot guard — so a self-claim at the ceiling
-takes slightly more than that budget and shifts up to roughly one holder's rent
-of shortfall onto whoever claims last, bounded by `PotTooSmall`, which is atomic
-and pre-CPI (nobody's claim is burnt) and which the admin then resolves by
-re-cranking that last holder with a smaller `amount`. Any future front-end
-self-claim must send the CLI's budgeted `amount`, not the ceiling.
+There is no self-service claim: the program bounds `max_sol_cost` only by the
+pot, so budgeting is the keeper's job, and holders depend on the keeper for
+their claims exactly as they do for `set_pump_mint` and `pump_graduate`.
 
 Rent: the vault pays the ATA and the accumulator out of the pot allowance, so
 the keeper never appears as a funder of any holder's account.
