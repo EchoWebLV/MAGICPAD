@@ -10,6 +10,8 @@ use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
+pub mod pump;
+
 pub const SO_PATH: &str = "../target/deploy/magicpad.so";
 pub const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -81,6 +83,9 @@ pub fn mint_pda(id: u64) -> Address {
 }
 pub fn pool_pda(mint: &Address) -> Address {
     Address::find_program_address(&[b"pool", mint.as_ref()], &program_id()).0
+}
+pub fn pump_pda(launch_id: u64) -> Address {
+    Address::find_program_address(&[b"pump", &launch_id.to_le_bytes()], &program_id()).0
 }
 pub fn session_pda(launch_id: u64, trader: &Address) -> Address {
     Address::find_program_address(
