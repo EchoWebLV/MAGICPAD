@@ -768,6 +768,7 @@ pub const E_POT_TOO_SMALL: u32 = 29;
 pub const E_CLAIM_TOO_LARGE: u32 = 30;
 pub const E_BAD_PUMP_ACCOUNT: u32 = 31;
 pub const E_PUMP_TOO_LATE: u32 = 32;
+pub const E_LAUNCH_NOT_RECONCILED: u32 = 33;
 
 pub fn gate_pda() -> Address {
     Address::find_program_address(&[b"gate"], &program_id()).0

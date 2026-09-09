@@ -363,6 +363,8 @@ pub fn pump_claim_ix(
     let vault = pump_vault_pda(launch_id, trader);
     let mut accounts = vec![
         AccountMeta::new(*cranker, true),
+        // the admin check: only platform.admin or session.trader may crank
+        AccountMeta::new_readonly(platform_pda(), false),
         AccountMeta::new_readonly(*trader, false),
         AccountMeta::new(launch_pda(launch_id), false),
         AccountMeta::new(pump_pda(launch_id), false),

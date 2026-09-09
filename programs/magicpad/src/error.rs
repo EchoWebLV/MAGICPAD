@@ -69,4 +69,6 @@ pub enum MagicPadError {
     BadPumpAccount, // 6031
     #[msg("pump mode must be enabled before the first trade")]
     PumpTooLate, // 6032
+    #[msg("launch not reconciled yet — every session settles before claims")]
+    LaunchNotReconciled, // 6033
 }
