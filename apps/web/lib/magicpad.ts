@@ -26,7 +26,7 @@ export {
   LAMPORTS, GRADUATION_LAMPORTS, TOKEN_DECIMALS, TOKEN_TOTAL_SUPPLY, MIN_DEPOSIT,
   VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, CURVE_TOKEN_ALLOC, maxCurveBuy, connection,
   publicConnection, PLATFORM, CONFIG, GATE, ENV_LAUNCH_FEE_LAMPORTS, ENV_LAUNCH_TAX_BPS, launchPda,
-  mintPda, sessionPda, topupPda, poolRecordPda, buyQuote, sellQuote, erEndpointFor,
+  mintPda, sessionPda, topupPda, poolRecordPda, pumpPda, buyQuote, sellQuote, erEndpointFor,
   erConnection,
 } from './core';
 

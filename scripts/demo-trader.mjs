@@ -54,6 +54,7 @@ const PLATFORM = pda(Buffer.from('platform'));
 const CONFIG = pda(Buffer.from('config'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
+const pumpPda = (id) => pda(Buffer.from('pump'), le8(id));
 const sessionPda = (id, trader) => pda(Buffer.from('tsession'), le8(id), trader.toBuffer());
 const ata = (owner, mint) => PublicKey.findProgramAddressSync(
   [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()], ATA_PROGRAM)[0];
@@ -323,7 +324,7 @@ async function runPipeline(id) {
   if (!h1.tokensClaimed) {
     await sendL1([await program.methods.claimTokens().accountsPartial({
       cranker: wallet.publicKey, trader: wallet.publicKey, platform: PLATFORM,
-      launch, session: s1, mint, traderAta,
+      launch, pump: pumpPda(id), session: s1, mint, traderAta,
       tokenProgram: TOKEN_PROGRAM, associatedTokenProgram: ATA_PROGRAM,
       systemProgram: SystemProgram.programId,
     }).instruction()], [wallet], 'claim_tokens (the FIRST mint of this token, ever)');

@@ -123,6 +123,10 @@ pub struct ClaimTokens<'info> {
         constraint = launch.id == session.launch_id @ MagicPadError::WrongLaunch)]
     pub launch: Box<Account<'info, Launch>>,
 
+    /// CHECK: must be EMPTY — pump.fun launches settle through pump_claim / pump_graduate
+    #[account(seeds = [PUMP_SEED, launch.id.to_le_bytes().as_ref()], bump)]
+    pub pump: UncheckedAccount<'info>,
+
     #[account(mut,
         seeds = [SESSION_SEED, session.launch_id.to_le_bytes().as_ref(), session.trader.as_ref()],
         bump = session.bump)]
@@ -142,6 +146,7 @@ pub struct ClaimTokens<'info> {
 }
 
 pub fn claim_tokens_handler(ctx: Context<ClaimTokens>) -> Result<()> {
+    require!(ctx.accounts.pump.data_is_empty(), MagicPadError::PumpMode);
     let s = &ctx.accounts.session;
     require!(s.reconciled, MagicPadError::NotReconciled);
     require!(!s.tokens_claimed, MagicPadError::AlreadyClaimed);
@@ -188,6 +193,10 @@ pub struct Graduate<'info> {
     #[account(mut, seeds = [LAUNCH_SEED, launch.id.to_le_bytes().as_ref()], bump = launch.bump)]
     pub launch: Box<Account<'info, Launch>>,
 
+    /// CHECK: must be EMPTY — pump.fun launches settle through pump_claim / pump_graduate
+    #[account(seeds = [PUMP_SEED, launch.id.to_le_bytes().as_ref()], bump)]
+    pub pump: UncheckedAccount<'info>,
+
     #[account(mut, seeds = [MINT_SEED, launch.id.to_le_bytes().as_ref()], bump,
         constraint = mint.key() == launch.mint @ MagicPadError::WrongLaunch)]
     pub mint: Box<Account<'info, Mint>>,
@@ -202,6 +211,7 @@ pub struct Graduate<'info> {
 }
 
 pub fn graduate_handler(ctx: Context<Graduate>) -> Result<()> {
+    require!(ctx.accounts.pump.data_is_empty(), MagicPadError::PumpMode);
     let (raised, flip_pot, lp_tokens) = {
         let l = &ctx.accounts.launch;
         let settled = l.is_settled();

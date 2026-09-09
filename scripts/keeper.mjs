@@ -8,6 +8,7 @@
 //                                   claim_tokens cranks,
 //                                   graduate when the pot crosses 5 SOL,
 //                                   then seed Meteora + lock the mint
+//   home + pump marker present      → reconcile only; migrate-pump.mjs (manual) finishes it
 //
 // Every payout target is pinned on-chain to session.trader, so the keeper
 // can only ever settle CORRECTLY — it pays fees, never decides amounts.
@@ -67,6 +68,7 @@ const PLATFORM = pda(Buffer.from('platform'));
 const CONFIG = pda(Buffer.from('config'));
 const launchPda = (id) => pda(Buffer.from('launch'), le8(id));
 const mintPda = (id) => pda(Buffer.from('mint'), le8(id));
+const pumpPda = (id) => pda(Buffer.from('pump'), le8(id));
 const sessionPda = (id, trader) => pda(Buffer.from('tsession'), le8(id), trader.toBuffer());
 const ata = (owner, mint) => PublicKey.findProgramAddressSync(
   [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()], ATA_PROGRAM)[0];
@@ -181,8 +183,13 @@ async function tendMigrated(id) {
 }
 
 async function tendHome(id, launch, l, adminKey) {
-  if (l.state === GRADUATED) { await tendMigrated(id); return; }
-  if (l.state < FROZEN || l.state > RECONCILED) return;
+  if (l.state < FROZEN) return;
+  // pump.fun launches: the keeper reconciles and stops. Claims and
+  // graduation run through scripts/migrate-pump.mjs, which the operator
+  // runs by hand, and a launch that graduated there has nothing to seed.
+  const isPump = !!(await conn.getAccountInfo(pumpPda(id)));
+  if (l.state === GRADUATED) { if (!isPump) await tendMigrated(id); return; }
+  if (l.state > RECONCILED) return;
 
   const raw = await conn.getProgramAccounts(PROGRAM_ID, { filters: sessionFilters(id) });
   const sessions = raw.map((r) => ({ pubkey: r.pubkey, s: decodeSession(r.account.data) }));
@@ -212,12 +219,17 @@ async function tendHome(id, launch, l, adminKey) {
     }).instruction()], `reconcile ${s.trader.toBase58().slice(0, 8)}…`);
   }
 
+  if (isPump) {
+    log(`launch ${id}: pump launch — reconciled; scripts/migrate-pump.mjs ${id} takes it from here`);
+    return;
+  }
+
   const mint = mintPda(id);
   for (const { pubkey, s } of sessions.filter((x) => x.s.reconciled)) {
     if (!s.tokensClaimed && s.tokensHeld.gtn(0)) {
       await sendL1([await program.methods.claimTokens().accountsPartial({
         cranker: keeper.publicKey, trader: s.trader, platform: PLATFORM,
-        launch, session: pubkey, mint, traderAta: ata(s.trader, mint),
+        launch, pump: pumpPda(id), session: pubkey, mint, traderAta: ata(s.trader, mint),
         tokenProgram: TOKEN_PROGRAM, associatedTokenProgram: ATA_PROGRAM,
         systemProgram: SystemProgram.programId,
       }).instruction()], `claim_tokens → ${s.trader.toBase58().slice(0, 8)}…`);
@@ -228,7 +240,7 @@ async function tendHome(id, launch, l, adminKey) {
     || (l.state === FROZEN && l.sessionsReconciled.eq(l.sessionsOpened));
   if (settled && l.realSolRaised.gte(GRADUATION_LAMPORTS) && keeper.publicKey.equals(adminKey)) {
     await sendL1([await program.methods.graduate().accountsPartial({
-      admin: keeper.publicKey, platform: PLATFORM, config: CONFIG, launch, mint,
+      admin: keeper.publicKey, platform: PLATFORM, config: CONFIG, launch, pump: pumpPda(id), mint,
       adminAta: ata(keeper.publicKey, mint),
       tokenProgram: TOKEN_PROGRAM, associatedTokenProgram: ATA_PROGRAM,
       systemProgram: SystemProgram.programId,

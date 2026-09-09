@@ -130,6 +130,7 @@ const plat = await program.account.platform.fetch(PLATFORM);
 const id = plat.launchSeq.toNumber();
 const launch = pdaOf(Buffer.from('launch'), le8(id));
 const mint = pdaOf(Buffer.from('mint'), le8(id));
+const pump = pdaOf(Buffer.from('pump'), le8(id));
 const session = pdaOf(Buffer.from('tsession'), le8(id), wallet.publicKey.toBuffer());
 
 await send([await program.methods.createLaunch(NAME, SYMBOL, true).accountsPartial({
@@ -219,13 +220,13 @@ await send([await program.methods.reconcileTradeSession().accountsPartial({
 const ata = (o, m) => PublicKey.findProgramAddressSync([o.toBuffer(), TOKEN_PROGRAM.toBuffer(), m.toBuffer()], ATA_PROGRAM)[0];
 await send([await program.methods.claimTokens().accountsPartial({
   cranker: wallet.publicKey, trader: wallet.publicKey, platform: PLATFORM,
-  launch, session, mint, traderAta: ata(wallet.publicKey, mint),
+  launch, pump, session, mint, traderAta: ata(wallet.publicKey, mint),
   tokenProgram: TOKEN_PROGRAM, associatedTokenProgram: ATA_PROGRAM, systemProgram: SystemProgram.programId,
 }).instruction()], '      claim_tokens');
 
 const launchBefore = await conn.getBalance(launch);
 await send([await program.methods.graduate().accountsPartial({
-  admin: wallet.publicKey, platform: PLATFORM, config: CONFIG, launch, mint,
+  admin: wallet.publicKey, platform: PLATFORM, config: CONFIG, launch, pump, mint,
   adminAta: ata(wallet.publicKey, mint),
   tokenProgram: TOKEN_PROGRAM, associatedTokenProgram: ATA_PROGRAM, systemProgram: SystemProgram.programId,
 }).instruction()], '      GRADUATE');

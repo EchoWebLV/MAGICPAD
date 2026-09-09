@@ -20,7 +20,7 @@ import {
 import {
   CLUSTER, DLP, MIN_DEPOSIT, PLATFORM, PROGRAM_ID, TOKEN_PROGRAM, TOPUP_DISCRIMINATOR,
   TOPUP_SPACE, connection, decodeLaunch, decodeSession, decodeTopUp, erConnection,
-  erEndpointFor, fetchGateKey, launchPda, mintPda, program, sessionPda, topupPda,
+  erEndpointFor, fetchGateKey, launchPda, mintPda, program, pumpPda, sessionPda, topupPda,
 } from './magicpad';
 import { WalletLike, notifyActivity, sendWithWallet } from './wallet-tx';
 
@@ -569,7 +569,9 @@ const ata = (owner: PublicKey, mint: PublicKey) =>
     [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()], ATA_PROGRAM,
   )[0];
 
-/** Permissionless crank: mint the ledger claim into the trader's ATA. */
+/** Permissionless crank: mint the ledger claim into the trader's ATA.
+ *  v3 (mainnet) also reads the pump marker — it must be empty; the devnet
+ *  program predates it. */
 export async function claimTokens(wallet: WalletLike, id: number, trader: PublicKey): Promise<string> {
   const mint = mintPda(id);
   const ix = await program.methods.claimTokens().accountsPartial({
@@ -577,6 +579,7 @@ export async function claimTokens(wallet: WalletLike, id: number, trader: Public
     trader,
     platform: PLATFORM,
     launch: launchPda(id),
+    ...(CLUSTER === 'mainnet' ? { pump: pumpPda(id) } : {}),
     session: sessionPda(id, trader),
     mint,
     traderAta: ata(trader, mint),

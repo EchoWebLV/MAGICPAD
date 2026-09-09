@@ -1252,3 +1252,27 @@ fn a_never_traded_session_reconciles_after_pump_graduate() {
     assert_eq!(read_launch(&svm, 0).sessions_reconciled, 2, "she never traded, so she never counts");
     assert_eq!(read_launch(&svm, 0).state, GRADUATED, "and the terminal state is untouched");
 }
+
+// ---- the Meteora path is closed for pump launches --------------------------
+
+#[test]
+fn claim_tokens_and_graduate_refuse_pump_launches() {
+    // no fixtures: the guard fires before anything pump-related is read
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 2 * LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 1_100_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 0)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, RECONCILED);
+    let res = send(&mut svm, &t.cranker, &[], &[claim_tokens_ix(&t.cranker.pubkey(), &t.alice.pubkey(), 0)]);
+    assert_pad_error(res, E_PUMP_MODE, "claim_tokens on a pump launch");
+    let res = send(&mut svm, &t.admin, &[], &[graduate_ix(&t.admin.pubkey(), 0)]);
+    assert_pad_error(res, E_PUMP_MODE, "graduate on a pump launch");
+}

@@ -494,6 +494,7 @@ pub fn claim_tokens_ix(cranker: &Address, trader: &Address, launch_id: u64) -> I
             AccountMeta::new_readonly(*trader, false),
             AccountMeta::new_readonly(platform_pda(), false),
             AccountMeta::new_readonly(launch_pda(launch_id), false),
+            AccountMeta::new_readonly(pump_pda(launch_id), false), // must be empty
             AccountMeta::new(session_pda(launch_id, trader), false),
             AccountMeta::new(mint, false),
             AccountMeta::new(ata_address(trader, &mint), false),
@@ -514,6 +515,7 @@ pub fn graduate_ix(admin: &Address, launch_id: u64) -> Instruction {
             AccountMeta::new(platform_pda(), false),
             AccountMeta::new_readonly(config_pda(), false),
             AccountMeta::new(launch_pda(launch_id), false),
+            AccountMeta::new_readonly(pump_pda(launch_id), false), // must be empty
             AccountMeta::new(mint, false),
             AccountMeta::new(ata_address(admin, &mint), false),
             AccountMeta::new_readonly(token_program_id(), false),

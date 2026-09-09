@@ -73,6 +73,9 @@ export const topupPda = (id: number, trader: PublicKey, nonce: number) =>
     new BN(nonce).toArrayLike(Buffer, 'le', 8));
 export const poolRecordPda = (mint: PublicKey) =>
   pda(Buffer.from('pool'), mint.toBuffer());
+// the pump.fun marker: exists ⇔ the launch graduates on pump.fun at 1 SOL
+export const pumpPda = (id: number) =>
+  pda(Buffer.from('pump'), new BN(id).toArrayLike(Buffer, 'le', 8));
 
 export const LAUNCH_DISC = Buffer.from(
   (idl as any).accounts.find((a: any) => a.name === 'Launch').discriminator,
