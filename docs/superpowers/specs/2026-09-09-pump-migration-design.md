@@ -128,8 +128,18 @@ web `claimTokens`, the canary scripts' pinned IDLs) add the one address.
 `buy`'s `pump` account stays *optional* (`None` for standard launches — passing
 a non-existent L1 address into the ER is untested, and standard launches must
 not depend on it). A session-key holder who omits it on a pump launch only makes
-the market keep bonding past 1 SOL; the UI always passes it, the gate keeps
-sessions UI-born, and `freeze_launch` is the admin recovery.
+the market keep bonding past 1 SOL; the UI always passes it and
+`freeze_launch` is the admin recovery. The gate is not a mitigation here: it
+gates session *entry* only, and the trader holds the session key, so raw `buy`
+transactions that omit the marker are possible. Open items, not in this plan:
+a keeper check that freezes a pump launch found BONDING past 1 SOL, and what
+`pump_claim`/`pump_graduate` do with a pot far above 1 SOL after such a late
+admin freeze.
+
+Client side: Anchor's JS resolver ignores `optional` when the IDL account has
+a `pda` block, so an omitted `pump` key is auto-derived from the seeds (or
+throws), never None. Every non-pump `buy` call must pass `pump: null` — the
+program-id sentinel the program reads as None.
 
 ### `pump_claim` flow
 

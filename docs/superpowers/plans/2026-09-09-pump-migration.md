@@ -1372,8 +1372,10 @@ fn buy_without_the_marker_account_keeps_the_85_sol_line() {
 
 #[test]
 fn non_pump_launch_ignores_a_missing_marker() {
-    // the optional account resolves to None when the PDA is empty — the
-    // 85 SOL line stays for ordinary launches even if a client passes it
+    // Option<Account> resolves to None only on omission (a shorter account
+    // list under allow-missing-optionals) or the program-id sentinel — an
+    // uninitialized PDA passed by address fails with AccountNotInitialized
+    // (3012) instead. Ordinary launches keep the 85 SOL line by omitting it.
     let mut svm = fresh_svm();
     let t = setup_table(&mut svm);
     send(
@@ -1415,10 +1417,20 @@ After the `TradeEr` struct add:
 
 ```rust
 
-/// buy = TradeEr + an optional trailing `pump` marker. Present (and
-/// non-empty) → the launch freezes at PUMP_GRADUATION_LAMPORTS. Omitted → the
-/// account resolves to None (anchor-lang `allow-missing-optionals`) and the
-/// 85 SOL line applies, so pre-existing clients keep working unchanged.
+/// buy = TradeEr + an optional trailing `pump` marker. The account resolves
+/// to None in exactly two cases (anchor-lang's `Option<T>::try_accounts`):
+/// the account list ends before it (`allow-missing-optionals`), or the key
+/// passed equals this program's own id — the sentinel every Anchor JS client
+/// emits for `pump: null`. Anything else is Some; an address that merely
+/// happens to be uninitialized fails with AccountNotInitialized (3012)
+/// rather than degrading to None.
+///
+/// Some → the launch freezes at PUMP_GRADUATION_LAMPORTS (1 SOL); the seeds
+/// constraint binds the marker to THIS launch. None → the 85 SOL
+/// GRADUATION_LAMPORTS line, so pre-existing 3-account clients keep working.
+///
+/// A non-pump launch must therefore omit the account or pass the program id
+/// — never the derived ["pump", launch_id] address, which does not exist.
 #[derive(Accounts)]
 pub struct BuyEr<'info> {
     pub session_signer: Signer<'info>,
@@ -3448,6 +3460,15 @@ The program is the source of truth; the web only mirrors it: the graduation line
 - Modify: `apps/web/app/page.tsx:8-10,77-78`
 - Regenerate: `apps/web/lib/idl-v3.json`
 
+Carried over from Task 4's review: Anchor's JS resolver (`@coral-xyz/anchor`
+0.32.1, `accounts-resolver.js`) ignores `optional` when an IDL account carries
+a `pda` block, so an omitted `pump` key is auto-derived from the seeds (or
+throws), never turned into the program-id sentinel. Every non-pump `buy`
+caller — `trade-live.ts` `buyLive`, the dev buy in `create/page.tsx:141`, and
+`scripts/{prove-topup,prove-buy-deploy,prove-rotate,fill-graduate,fair-canary}.mjs`
+— already passes `pump: null` since the Task 4 fix commit. Keep that when
+rewriting `buyLive` below; never leave the key out.
+
 No litesvm test covers this task; the check is `tsc --noEmit` + `next build` + a dev-server look at the create form and a launch page.
 
 - [ ] **Step 1: IDL**
@@ -3654,8 +3675,12 @@ and `buyLive` becomes
 export async function buyLive(wallet: WalletLike, id: number, lamports: number): Promise<string> {
   const trader = wallet.publicKey!;
   // the marker is an Option<Account> on the program side: pass it when the
-  // launch has one, omit it otherwise (the devnet program has no such slot)
-  const pump = CLUSTER === 'mainnet' && await isPumpLaunch(id) ? { pump: pumpPda(id) } : {};
+  // launch has one, `null` otherwise. null is the program-id sentinel the
+  // program reads as None; an OMITTED key makes Anchor's JS resolver derive
+  // the PDA from the IDL's seeds (it ignores `optional`) and the buy fails
+  // on-chain with AccountNotInitialized. The devnet IDL has no such slot and
+  // ignores the key.
+  const pump = CLUSTER === 'mainnet' && await isPumpLaunch(id) ? { pump: pumpPda(id) } : { pump: null };
   return sendHealing(wallet, id, async (sk) => program.methods.buy(new BN(lamports)).accountsPartial({
     sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id), ...pump,
   }).instruction());
@@ -4113,7 +4138,15 @@ node scripts/migrate-pump.mjs <id> --confirm
   admin can `pump_graduate` only after every claim, so the pot stays in the
   launch PDA until the numbers work — there is no drain path.
 - ER cloning: the marker is never delegated; the ER validator clones
-  non-delegated accounts on first use (the canary precedent).
+  non-delegated accounts on first use. The precedent is the long-lived
+  `platform` PDA read by `freeze_launch`; a marker born in the same tx as
+  `delegate_launch` and read by an ER `buy` a slot later is untested. Before
+  the mainnet upgrade, run a devnet pass: create + enable_pump +
+  open_trade_session + delegate in one tx, then an immediate ER buy carrying
+  the marker — assert the FIRST buy lands (not a retry) and that a 1 SOL buy
+  freezes (`scripts/prove-buy-deploy.mjs` is the closest harness to extend).
+  Every failure mode is fail-closed (tx error or AccountNotInitialized);
+  none silently falls back to the 85 SOL line.
 
 ## 4. What never changes
 
