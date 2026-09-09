@@ -170,4 +170,9 @@ pub mod magicpad {
     pub fn record_pool(ctx: Context<RecordPool>, pool: Pubkey) -> Result<()> {
         record_pool_handler(ctx, pool)
     }
+
+    // ---- pump.fun mode ----
+    pub fn enable_pump(ctx: Context<EnablePump>, launch_id: u64) -> Result<()> {
+        enable_pump_handler(ctx, launch_id)
+    }
 }

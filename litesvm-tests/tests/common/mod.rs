@@ -517,6 +517,19 @@ pub fn record_pool_ix(admin: &Address, launch_id: u64, pool: &Address) -> Instru
     }
 }
 
+pub fn enable_pump_ix(creator: &Address, launch_id: u64) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(*creator, true),
+            AccountMeta::new_readonly(launch_pda(launch_id), false),
+            AccountMeta::new(pump_pda(launch_id), false),
+            AccountMeta::new_readonly(system_id(), false),
+        ],
+        data: ix_data("enable_pump", &launch_id),
+    }
+}
+
 // ---------- borsh mirrors (skip the 8-byte discriminator) ----------
 
 #[derive(borsh::BorshDeserialize, Debug)]
