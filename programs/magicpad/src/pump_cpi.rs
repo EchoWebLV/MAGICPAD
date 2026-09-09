@@ -20,7 +20,9 @@ pub fn bonding_curve(mint: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[b"bonding-curve", mint.as_ref()], &PUMP_PROGRAM).0
 }
 
-/// buy(amount, max_sol_cost, track_volume = Some(true))
+/// buy(amount, max_sol_cost) followed by one trailing 0x01 byte that enables
+/// volume tracking: 25 bytes total, proven against the mainnet ELF (spec
+/// "hard facts"). This is NOT a two-byte borsh Option<bool> — do not widen it.
 pub fn buy_ix_data(amount: u64, max_sol_cost: u64) -> Vec<u8> {
     let mut d = Vec::with_capacity(25);
     d.extend_from_slice(&BUY_DISC);
@@ -48,6 +50,7 @@ pub fn parse_bonding_curve(data: &[u8]) -> Option<BondingCurveHead> {
 }
 
 /// Every key pump `buy` reads, in program order. `user` signs.
+#[derive(Debug, Clone, Copy)]
 pub struct BuyKeys {
     pub global: Pubkey,
     pub fee_recipient: Pubkey,
@@ -171,5 +174,13 @@ mod tests {
         let close = close_uva_instruction(k.user, k.user_volume_accumulator, k.event_authority);
         assert_eq!(close.accounts.len(), 4);
         assert_eq!(close.data, CLOSE_UVA_DISC.to_vec());
+    }
+
+    #[test]
+    fn bonding_curve_pda_matches_the_sdk() {
+        // pair taken from the litesvm fixture capture (mint from fixtures/meta.txt);
+        // expected side computed with @pump-fun/pump-sdk bondingCurvePda(mint)
+        let mint = pubkey!("JE91H8efczBQWfjZHmrFwBAC56irajtqXTnFKv1S5hdm");
+        assert_eq!(bonding_curve(&mint), pubkey!("F4dJPLrrD6bWfc3YTo1pLrEXLm2btfVab2iNaGhED2Ec"));
     }
 }
