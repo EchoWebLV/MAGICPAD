@@ -3473,8 +3473,8 @@ No litesvm test covers this task; the check is `tsc --noEmit` + `next build` + a
 
 - [ ] **Step 1: IDL**
 
-Run: `anchor build 2>&1 | grep -E "^error"; cp target/idl/magicpad.json apps/web/lib/idl-v3.json && node -e "const i=require('./apps/web/lib/idl-v3.json'); console.log(i.accounts.map(a=>a.name).join(','))"`
-Expected: no errors; the list includes `PumpLaunch`. (`idl-v3.json` is what the web speaks on mainnet; the devnet IDL stays untouched.)
+Run: `anchor build 2>&1 | grep -E "^error"; cp target/idl/magicpad.json apps/web/lib/idl-v3.json && node -e "const i=require('./apps/web/lib/idl-v3.json'); console.log(i.accounts.map(a=>a.name).join(',')); const b=i.instructions.find(x=>x.name==='buy').accounts.find(a=>a.name==='pump'); console.log('buy.pump optional =', b && b.optional === true)"`
+Expected: no errors; the list includes `PumpLaunch`; `buy.pump optional = true`. That flag is load-bearing: Anchor's JS resolver turns `pump: null` into the program-id sentinel ONLY when the IDL account says `optional: true`; without it `null` yields no entry, the resolver derives the PDA, and every non-pump buy fails 3012. (`idl-v3.json` is what the web speaks on mainnet; the devnet IDL stays untouched.)
 
 - [ ] **Step 2: `core.ts` — the constants and the PDA**
 
@@ -4150,7 +4150,11 @@ node scripts/migrate-pump.mjs <id> --confirm
 
 ## 4. What never changes
 
-- `scripts/mainnet-canary/` stays gitignored; never push it.
+- `scripts/mainnet-canary/` stays gitignored; never push it. Its v1
+  `run.mjs` loads the live `target/idl/magicpad.json` and calls `buy`
+  without `pump`; it is frozen against its pinned `.so` (`PINNED_SO_SHA`)
+  and must not be run against the pump-era IDL. `run2`–`run4` load pinned
+  pump-free IDLs and are unaffected.
 - `scripts/pump-mints/<id>.json` is the pump token's mint secret. Back it up
   off-repo; losing it before phase 1 sends means a new CA on the next run —
   after phase 1 the mint is on-chain and the file is only needed for the
