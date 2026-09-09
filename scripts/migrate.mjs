@@ -39,7 +39,7 @@ const GRADUATED = 3;
 const RECORD = path.join(root, 'scripts/migrations.json');
 const PUBLIC_RECORD = path.join(root, 'apps/web/public/migrations.json');
 
-function loadKeeper() {
+export function loadKeeper() {
   const env = process.env.KEEPER_KEYPAIR;
   if (env) {
     const raw = env.trim().startsWith('[') ? env : fs.readFileSync(env, 'utf8');
@@ -56,10 +56,10 @@ const ata = (owner, mint) => PublicKey.findProgramAddressSync(
 const sol = (n) => (Number(n) / LAMPORTS_PER_SOL).toFixed(4) + '◎';
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
-function readRecord() {
+export function readRecord() {
   try { return JSON.parse(fs.readFileSync(RECORD, 'utf8')); } catch { return {}; }
 }
-function writeRecord(data) {
+export function writeRecord(data) {
   fs.writeFileSync(RECORD, JSON.stringify(data, null, 2) + '\n');
   try {
     fs.mkdirSync(path.dirname(PUBLIC_RECORD), { recursive: true });
@@ -123,6 +123,12 @@ export async function migrateLaunch({
   const l = await program.account.launch.fetch(launch);
   if (l.state !== GRADUATED) {
     log(`launch ${id}: state ${l.state} — not GRADUATED`);
+    return null;
+  }
+
+  // a pump.fun launch has no Meteora pool to seed — migrate-pump.mjs owns it
+  if (await conn.getAccountInfo(pda(PROGRAM_ID, Buffer.from('pump'), le8(id)))) {
+    log(`launch ${id}: pump.fun launch — scripts/migrate-pump.mjs owns it`);
     return null;
   }
 
