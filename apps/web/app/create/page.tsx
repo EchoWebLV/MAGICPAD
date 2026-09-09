@@ -126,7 +126,7 @@ export default function Create() {
       // the marker must exist before the first trade (enable_pump → PumpTooLate
       // afterwards), so it rides in the creation tx
       if (pump) {
-        tx.add(await (program.methods as any).enablePump(new BN(id)).accountsPartial({
+        tx.add(await program.methods.enablePump(new BN(id)).accountsPartial({
           creator: publicKey, launch, pump: pumpPda(id), systemProgram: SystemProgram.programId,
         }).instruction());
       }

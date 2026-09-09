@@ -35,6 +35,16 @@ const PROGRAM_ERROR_TEXT: Record<number, string> = {
   6013: 'ledger guard tripped, refresh and retry',
   6017: 'settlement pot not ready yet',
   6018: 'that top-up was already applied',
+  6024: 'this launch graduates on pump.fun — claims run through the migration, not here',
+  6025: 'the pump.fun mint is not pinned yet, the migration has not run',
+  6026: 'the pump.fun mint is already pinned for this launch',
+  6027: 'that pump.fun mint does not belong to this launch',
+  6028: 'pump.fun claims are still outstanding on this launch',
+  6029: 'the launch pot cannot cover that pump.fun buy',
+  6030: 'that claim is bigger than the share this session settled',
+  6031: 'a pump.fun-side account is not the one this launch expects',
+  6032: 'pump mode must be enabled before the first trade',
+  6033: 'not reconciled yet, every session settles before claims',
 };
 
 /** Custom program error code from any error surface we see: preflight
@@ -469,30 +479,37 @@ async function sendHealing(
   }
 }
 
-// whether a launch carries the pump marker — immutable once trading starts,
-// so one L1 read per launch per page life is enough
-const pumpFlag = new Map<number, Promise<boolean>>();
-export function isPumpLaunch(id: number): Promise<boolean> {
-  let p = pumpFlag.get(id);
-  if (!p) {
-    p = connection.getAccountInfo(pumpPda(id)).then((a) => !!a).catch(() => { pumpFlag.delete(id); return false; });
-    pumpFlag.set(id, p);
-  }
-  return p;
-}
+export interface PumpView { pumpMint: string | null }
 
-export interface PumpView { pumpMint: string | null; claimsDone: number }
+/* The pump marker, read once and remembered. It decides the graduation
+ * line, so a failed read must never read as "no marker" — callers get
+ * `undefined` and keep whatever they already knew.
+ *
+ * The memo rules come from the program: absence is final (enable_pump
+ * wants an untraded, NOT-yet-delegated launch — instructions/pump.rs:31-40,
+ * 52-58 — and the create tx delegates in the same transaction, so a launch
+ * that has no marker can never grow one), a pinned pump_mint is final
+ * (set_pump_mint is one-shot, pump.rs:104), and a marker whose mint is
+ * still unset is re-read on the same 45s L1 gate as history.ts:63. */
+const PUMP_MEMO_MS = 45_000;
+const pumpMemo = new Map<number, { view: PumpView | null; at: number }>();
 
-/** The pump marker's contents, or null for a Meteora launch. */
-export async function readPumpLaunch(id: number): Promise<PumpView | null> {
-  const a = await connection.getAccountInfo(pumpPda(id));
-  if (!a) return null;
-  const d = decodePumpLaunch(a.data);
-  const pumpMint = d.pumpMint as PublicKey;
-  return {
-    pumpMint: pumpMint.equals(PublicKey.default) ? null : pumpMint.toBase58(),
-    claimsDone: (d.claimsDone as BN).toNumber(),
-  };
+/** The pump marker's contents, `null` for a Meteora launch, `undefined`
+ *  when the read failed — the caller holds its last known answer. */
+export async function readPumpLaunch(id: number): Promise<PumpView | null | undefined> {
+  if (CLUSTER !== 'mainnet') return null; // the devnet program has no marker
+  const hit = pumpMemo.get(id);
+  if (hit && (hit.view === null || hit.view.pumpMint || Date.now() - hit.at <= PUMP_MEMO_MS)) return hit.view;
+  try {
+    const a = await connection.getAccountInfo(pumpPda(id));
+    let view: PumpView | null = null;
+    if (a) {
+      const mint = decodePumpLaunch(a.data).pumpMint as PublicKey;
+      view = { pumpMint: mint.equals(PublicKey.default) ? null : mint.toBase58() };
+    }
+    pumpMemo.set(id, { view, at: Date.now() });
+    return view;
+  } catch { return undefined; } // read or decode failed — memo untouched
 }
 
 export async function buyLive(wallet: WalletLike, id: number, lamports: number): Promise<string> {
@@ -503,7 +520,11 @@ export async function buyLive(wallet: WalletLike, id: number, lamports: number):
   // the PDA from the IDL's seeds (it ignores `optional`) and the buy fails
   // on-chain with AccountNotInitialized. The devnet IDL has no such slot and
   // ignores the key.
-  const pump = CLUSTER === 'mainnet' && await isPumpLaunch(id) ? { pump: pumpPda(id) } : { pump: null as any };
+  // A read that FAILED must not become a wrong-line buy: the standard line
+  // on a 1◎ launch bonds straight past it. Refuse and let them retry.
+  const pv = await readPumpLaunch(id);
+  if (pv === undefined) throw new Error(`could not read the pump marker for launch ${id} — retry the buy`);
+  const pump = { pump: pv ? pumpPda(id) : (null as any) };
   return sendHealing(wallet, id, async (sk) => program.methods.buy(new BN(lamports)).accountsPartial({
     sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id), ...pump,
   }).instruction());

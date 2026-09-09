@@ -142,18 +142,24 @@ export default function LaunchPage() {
     if (id === null) return;
     const [r, p, h, pv] = await Promise.all([
       readLaunchLive(id).catch(() => null),
-      // undefined = the read FAILED this tick (ER hiccup); null = the chain
-      // positively says no session. Only the latter may clear the panel.
+      // undefined = the read FAILED this tick (an ER hiccup for the session,
+      // an L1 one for the pump marker); null = the chain positively says no
+      // session / no marker. Only the latter may clear the panel or move the
+      // graduation line — readPumpLaunch answers undefined on its own and
+      // memoises, so it neither needs a catch nor reads every tick.
       publicKey ? readPosition(publicKey, id).catch(() => undefined) : Promise.resolve(null),
       fetchHistory(id).catch(() => null),
-      readPumpLaunch(id).catch(() => null),
+      readPumpLaunch(id),
     ]);
     const hold = pendingRef.current;
     const caught = !hold || posCaughtUp(p, hold.pos);
+    // hold the last known marker rather than repainting a pump launch as a
+    // Meteora one for a tick — wrong line, wrong chip, claim button back
+    const pump = pv === undefined ? (live?.pump ? { pumpMint: live.pumpMint } : null) : pv;
     // a fill we just painted must not lose to a stale ER read — hold the
     // curve and the position until this trader's session has moved, not
     // until a clock runs out
-    if (r && caught) setLive(toLive(r.l, r.dark, pv));
+    if (r && caught) setLive(toLive(r.l, r.dark, pump));
     else if (r === null && live === null) setGone(true);
     if (p !== undefined && caught) setPos(p);
     if (h) {

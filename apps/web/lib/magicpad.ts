@@ -158,20 +158,26 @@ async function sweepLaunches(conn: Connection): Promise<LaunchView[]> {
   if (!plat) return [];
   const seq = (program.coder.accounts.decode('platform', plat.data).launchSeq as BN).toNumber();
   if (seq <= 0) return [];
+  type Accs = Awaited<ReturnType<Connection['getMultipleAccountsInfo']>>;
+  const batch = async (ks: PublicKey[]): Promise<Accs> => {
+    const out: Accs = [];
+    for (let i = 0; i < ks.length; i += 100) out.push(...await conn.getMultipleAccountsInfo(ks.slice(i, i + 100)));
+    return out;
+  };
   const keys = Array.from({ length: seq }, (_, i) => launchPda(i));
-  const accs: Awaited<ReturnType<Connection['getMultipleAccountsInfo']>> = [];
-  for (let i = 0; i < keys.length; i += 100) {
-    accs.push(...await conn.getMultipleAccountsInfo(keys.slice(i, i + 100)));
-  }
-  // the pump markers live on L1 and are never delegated — one more sweep
+  // the pump markers live on L1 and are never delegated — one more batch,
+  // independent of the launch one so it rides alongside it. Only mainnet
+  // runs the pump program, so devnet skips the round-trip entirely.
   const pumpKeys = Array.from({ length: seq }, (_, i) => pumpPda(i));
-  const pumps: ({ pumpMint: PublicKey } | null)[] = [];
-  for (let i = 0; i < pumpKeys.length; i += 100) {
-    for (const a of await conn.getMultipleAccountsInfo(pumpKeys.slice(i, i + 100))) {
-      if (!a || !a.owner.equals(PROGRAM_ID)) { pumps.push(null); continue; }
-      try { pumps.push({ pumpMint: decodePumpLaunch(a.data).pumpMint as PublicKey }); } catch { pumps.push(null); }
-    }
-  }
+  const [accs, pumpAccs] = await Promise.all([
+    batch(keys),
+    CLUSTER === 'mainnet' ? batch(pumpKeys) : Promise.resolve<Accs>([]),
+  ]);
+  const pumps: ({ pumpMint: PublicKey } | null)[] = Array.from({ length: seq }, () => null);
+  pumpAccs.forEach((a, i) => {
+    if (!a || !a.owner.equals(PROGRAM_ID)) return;
+    try { pumps[i] = { pumpMint: decodePumpLaunch(a.data).pumpMint as PublicKey }; } catch { /* not a marker */ }
+  });
   const overlays = accs.map(async (account, i) => {
     if (!account) return null;
     const dark = account.owner.equals(DLP);

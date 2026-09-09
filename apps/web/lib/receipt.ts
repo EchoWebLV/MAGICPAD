@@ -18,8 +18,8 @@
 
 import { PublicKey } from '@solana/web3.js';
 import {
-  GRADUATION_LAMPORTS, LAMPORTS, PROGRAM_ID, PUMP_GRADUATION_LAMPORTS, RPC_URL, connection, erConnection,
-  erEndpointFor, launchPda, mintPda, poolRecordPda, pumpPda,
+  CLUSTER, GRADUATION_LAMPORTS, LAMPORTS, PROGRAM_ID, PUMP_GRADUATION_LAMPORTS, RPC_URL, connection,
+  erConnection, erEndpointFor, launchPda, mintPda, poolRecordPda, pumpPda,
 } from './core';
 import {
   HistRow, SessionRow, decodeLaunch, sessionsFor, sessionsForTraders, sweepLedger,
@@ -112,7 +112,8 @@ export async function buildReceipt(id: number): Promise<Receipt | null> {
   const live = await liveLaunch(id);
   if (!live) return null;
   const { acct: l, potLamports } = live;
-  const pump = !!(await connection.getAccountInfo(pumpPda(id)));
+  // only mainnet runs the pump program — no marker can exist on devnet
+  const pump = CLUSTER === 'mainnet' && !!(await connection.getAccountInfo(pumpPda(id)));
 
   const [sweep, homeSessions] = await Promise.all([
     sweepLedger(id, { gapMs: 0 }),
