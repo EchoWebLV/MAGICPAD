@@ -136,6 +136,19 @@ a keeper check that freezes a pump launch found BONDING past 1 SOL, and what
 `pump_claim`/`pump_graduate` do with a pot far above 1 SOL after such a late
 admin freeze.
 
+More open items on the pin itself (found in Task 5 review), also not in this
+plan:
+- The pin is one-shot and the only on-chain binding is `creator == launch.creator`;
+  any pump token by that creator passes. A mispin is irreversible. The CLI must
+  therefore pin ONLY the mint it persisted to `scripts/pump-mints/<launch_id>.json`
+  and re-read the curve (creator, `complete == false`) right before sending.
+- `set_pump_mint`'s `!complete` check is point-in-time. Anyone can buy the pump
+  token to completion between the pin and the claims; then every `pump_claim`
+  buy CPI fails and the pot is stuck behind `PumpClaimsOutstanding`. No
+  recovery path is designed here.
+- Two launches by the same creator can pin the same pump mint; nothing on-chain
+  forbids it. The CLI's one-mint-per-launch file is the only guard.
+
 Client side: Anchor's JS resolver ignores `optional` when the IDL account has
 a `pda` block, so an omitted `pump` key is auto-derived from the seeds (or
 throws), never None. Every non-pump `buy` call must pass `pump: null` — the
