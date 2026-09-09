@@ -176,7 +176,7 @@ Args: `amount: u64` (tokens to buy, from the crank's per-holder budget),
    would then fail `PotNotReady` forever). Then `require!(session.reconciled &&
    !session.tokens_claimed)` — the session-level check stays reachable, for a
    session that never traded and so was never counted in `sessions_opened`. If
-   `tokens_held == 0` (a session that fully exited during bonding): mark
+   `tokens_held == 0` (fully exited during bonding, or never traded at all): mark
    `tokens_claimed` (`amount` must be 0, else `ClaimTooLarge`); bump
    `claims_done` **only if `sol_spent > 0`** (a session that deposited but never
    traded is not in `sessions_opened` and must not be counted); return — no
@@ -220,6 +220,11 @@ about 1.9 M lamports each on a 1 SOL raise. Cranking in ascending average cost
 There is no self-service claim: the program bounds `max_sol_cost` only by the
 pot, so budgeting is the keeper's job, and holders depend on the keeper for
 their claims exactly as they do for `set_pump_mint` and `pump_graduate`.
+A claim that does not fit fails `PotTooSmall` before any lamport moves (the
+guard runs ahead of `fund_vault` and every CPI), and a pump-side failure rolls
+the whole instruction back, so a failed crank burns nothing: the keeper simply
+retries that holder with a smaller `amount`. A crank that *succeeds* with too
+small an `amount` is final — `tokens_claimed` is set unconditionally.
 
 Rent: the vault pays the ATA and the accumulator out of the pot allowance, so
 the keeper never appears as a funder of any holder's account.
