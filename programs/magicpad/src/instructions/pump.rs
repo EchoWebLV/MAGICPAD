@@ -1,8 +1,10 @@
-//! pump.fun mode. The PumpLaunch PDA is the switch; the four instructions
-//! here are enable (creator, before any trade), set_pump_mint (admin, once
-//! the CLI created the pump token), pump_claim (per session — the vault buys
-//! the trader's share on pump.fun) and pump_graduate (the remainder is burnt
-//! through a buy, residue to the platform, Mooner mint revoked).
+//! pump.fun mode. The PumpLaunch PDA is the switch; the three instructions
+//! here are enable_pump (creator, before any trade), set_pump_mint (admin —
+//! the pin of the pump.fun mint the CLI created) and pump_claim (per session
+//! — the vault buys the trader's share on pump.fun). pump_claim is cranked
+//! by the platform admin (the keeper CLI) or by the holder herself, and
+//! waits until the launch has settled. pump_graduate (Task 7) will join
+//! this module.
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::{self, AssociatedToken, Create};
 use anchor_spl::token::spl_token::instruction::AuthorityType;
@@ -209,6 +211,11 @@ pub fn pump_claim_handler(ctx: Context<PumpClaim>, amount: u64, max_sol_cost: u6
     // who may crank: the keeper (platform admin) or the holder herself. A
     // caller-chosen `amount` is a weapon in a stranger's hands — one token
     // into the ATA marks tokens_claimed and the real share is gone.
+    // The trader path is a keeper-outage fallback and is unbudgeted (only the
+    // ceiling and the pot guard bind): a self-claim at the ceiling shifts up
+    // to about one holder's rent onto later claimants, bounded by PotTooSmall
+    // — atomic and pre-CPI, so no claim burns; the admin re-cranks the last
+    // holder with a smaller `amount`.
     require!(
         ctx.accounts.cranker.key() == ctx.accounts.platform.admin
             || ctx.accounts.cranker.key() == ctx.accounts.session.trader,
@@ -217,9 +224,9 @@ pub fn pump_claim_handler(ctx: Context<PumpClaim>, amount: u64, max_sol_cost: u6
     // set_pump_mint accepts a FROZEN launch, so the pin can land while
     // winners are still unreconciled — and their profit comes out of this
     // very pot, which pot_available reserves nothing for. Claims wait until
-    // every session has settled.
+    // every traded session has settled (`Launch::is_settled`).
     require!(
-        ctx.accounts.launch.state == LAUNCH_RECONCILED,
+        ctx.accounts.launch.is_settled(),
         MagicPadError::LaunchNotReconciled
     );
     let s = &ctx.accounts.session;

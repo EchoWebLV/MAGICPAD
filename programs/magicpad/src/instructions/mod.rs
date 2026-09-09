@@ -3,9 +3,10 @@ pub mod graduate;
 pub mod launch;
 pub mod metadata;
 pub mod pump;
-// helpers only, no Accounts struct: crate-visible so `pub use` below stays
-// meaningful (a glob re-export of pub(crate) items reexports nothing).
-pub(crate) mod pump_vault;
+// helpers only, no Accounts struct: a private sibling — `pump` reaches it via
+// `super::pump_vault`, and a glob re-export of its pub(crate) items would
+// export nothing (cargo warns).
+mod pump_vault;
 pub mod reconcile;
 pub mod session;
 pub mod topup;

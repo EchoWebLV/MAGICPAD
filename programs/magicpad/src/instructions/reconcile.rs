@@ -204,8 +204,7 @@ pub struct Graduate<'info> {
 pub fn graduate_handler(ctx: Context<Graduate>) -> Result<()> {
     let (raised, flip_pot, lp_tokens) = {
         let l = &ctx.accounts.launch;
-        let settled = l.state == LAUNCH_RECONCILED
-            || (l.state == LAUNCH_FROZEN && l.sessions_reconciled == l.sessions_opened);
+        let settled = l.is_settled();
         require!(settled, MagicPadError::NotGraduatable);
         require!(
             l.real_sol_raised >= GRADUATION_LAMPORTS,

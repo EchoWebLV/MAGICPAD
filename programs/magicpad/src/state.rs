@@ -39,6 +39,16 @@ pub const LAUNCH_FROZEN: u8 = 1;
 pub const LAUNCH_RECONCILED: u8 = 2;
 pub const LAUNCH_GRADUATED: u8 = 3;
 
+impl Launch {
+    /// Every traded session has settled: RECONCILED, or still FROZEN with
+    /// nothing left to reconcile (reconcile flips the state only from a
+    /// session that spent, so FROZEN with equal counts means nobody traded).
+    pub fn is_settled(&self) -> bool {
+        self.state == LAUNCH_RECONCILED
+            || (self.state == LAUNCH_FROZEN && self.sessions_reconciled == self.sessions_opened)
+    }
+}
+
 // Mint-seeded pointer at the DAMM v2 pool. Launch layout stays untouched so
 // live bonding accounts keep deserializing after this upgrade. Anyone with
 // the CA can derive this PDA — the swap API never needs launch id.
