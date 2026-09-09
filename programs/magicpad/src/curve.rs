@@ -2,6 +2,11 @@
 //! Pure math, zero account/anchor deps — unit-tested in-crate on the host.
 //! All intermediates u128. Rounds AGAINST the trader (the curve never leaks).
 
+/// Both quotes ceil the post-trade reserve, i.e. round against the trader: a
+/// buy-then-sell round trip strictly loses ≥1 lamport, so `real_sol_raised`
+/// never returns to 0 once anyone has bought. `enable_pump` relies on that
+/// when it reads `real_sol_raised == 0 && tokens_sold == 0` as "never traded";
+/// do not switch to neutral rounding without revisiting it.
 pub fn buy_quote(virtual_sol: u64, virtual_tok: u64, sol_in: u64) -> Option<u64> {
     if sol_in == 0 {
         return Some(0);

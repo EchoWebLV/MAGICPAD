@@ -55,3 +55,32 @@ fn enable_pump_twice_fails() {
     let res = send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]);
     assert!(res.is_err(), "init on an existing account must fail");
 }
+
+#[test]
+fn enable_pump_allowed_after_session_open_before_any_buy() {
+    // open_trade_session touches no Launch field: the curve is still unpriced,
+    // so the creator may still pick the 1 SOL line with a deposit already escrowed
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    assert_eq!(read_pump(&svm, 0).launch_id, 0);
+}
+
+#[test]
+fn enable_pump_works_on_a_fair_launch() {
+    // pump mode and fairest mode compose; enable reads nothing fair-specific
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(&mut svm, &t.creator, &[], &[create_launch_fair_ix(&t.creator.pubkey(), 1, "FAIREST", "FAIR")]).unwrap();
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 1)]).unwrap();
+    let p = read_pump(&svm, 1);
+    assert_eq!(p.launch_id, 1);
+    assert_eq!(p.pump_mint, [0u8; 32]);
+}

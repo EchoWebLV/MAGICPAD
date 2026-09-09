@@ -14,12 +14,16 @@ use crate::state::{Launch, PumpLaunch, LAUNCH_BONDING};
 pub struct EnablePump<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
+    /// `Account<>` on purpose: the owner check IS the "before delegate_launch"
+    /// guard. Once delegated the launch is DLP-owned and this instruction is
+    /// permanently unreachable (no undelegate path while BONDING), so the
+    /// create tx must bundle enable_pump ahead of delegate_launch.
     #[account(
         seeds = [LAUNCH_SEED, launch_id.to_le_bytes().as_ref()],
         bump = launch.bump,
         constraint = launch.creator == creator.key() @ MagicPadError::Unauthorized,
     )]
-    pub launch: Account<'info, Launch>,
+    pub launch: Box<Account<'info, Launch>>,
     #[account(
         init,
         payer = creator,
@@ -27,7 +31,7 @@ pub struct EnablePump<'info> {
         seeds = [PUMP_SEED, launch_id.to_le_bytes().as_ref()],
         bump,
     )]
-    pub pump: Account<'info, PumpLaunch>,
+    pub pump: Box<Account<'info, PumpLaunch>>,
     pub system_program: Program<'info, System>,
 }
 
