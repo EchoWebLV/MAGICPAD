@@ -159,6 +159,21 @@ pub fn assert_pad_error<T: std::fmt::Debug>(
     );
 }
 
+/// assert a tx failed with an anchor framework error code (ConstraintSeeds 2006,
+/// AccountNotInitialized 3012, …) — those live below the 6000 program range.
+pub fn assert_anchor_error<T: std::fmt::Debug>(
+    res: Result<T, litesvm::types::FailedTransactionMetadata>,
+    code: u32,
+    what: &str,
+) {
+    let err = res.expect_err(&format!("{what}: expected failure"));
+    let s = format!("{:?}", err.err);
+    assert!(
+        s.contains(&format!("Custom({code})")) || s.contains(&format!("custom program error: {code}")),
+        "{what}: expected anchor error {code}, got {s}"
+    );
+}
+
 pub fn warp_to(svm: &mut LiteSVM, unix_ts: i64) {
     let mut clock: Clock = svm.get_sysvar();
     clock.unix_timestamp = unix_ts;
@@ -335,6 +350,20 @@ pub fn buy_ix(session_key: &Address, trader: &Address, launch_id: u64, amount_in
 pub fn buy_ix_pump(session_key: &Address, trader: &Address, launch_id: u64, amount_in: u64) -> Instruction {
     let mut ix = buy_ix(session_key, trader, launch_id, amount_in);
     ix.accounts.push(AccountMeta::new_readonly(pump_pda(launch_id), false));
+    ix
+}
+
+/// buy with an arbitrary trailing account — the wrong-marker and
+/// program-id-sentinel cases
+pub fn buy_ix_trailing(
+    session_key: &Address,
+    trader: &Address,
+    launch_id: u64,
+    amount_in: u64,
+    trailing: &Address,
+) -> Instruction {
+    let mut ix = buy_ix(session_key, trader, launch_id, amount_in);
+    ix.accounts.push(AccountMeta::new_readonly(*trailing, false));
     ix
 }
 

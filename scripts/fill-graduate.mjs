@@ -169,7 +169,7 @@ while (left > 0) {
   if (l.state !== 0) break;
   const chunk = Math.min(left, 2 * LAMPORTS_PER_SOL);
   await sendEr(er, [await program.methods.buy(new BN(chunk)).accountsPartial({
-    sessionSigner: sk.publicKey, session, launch,
+    sessionSigner: sk.publicKey, session, launch, pump: null,
   }).instruction()], sk, `buy ${sol(chunk)}`);
   left -= chunk;
 }

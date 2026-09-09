@@ -15,6 +15,7 @@ use crate::state::{Launch, PumpLaunch, TradeSession, LAUNCH_BONDING, LAUNCH_FROZ
 // invisible to every L1 indexer. Dark bonding, zero fees, zero popups.
 // ============================================================================
 
+// sell only — buy's variant, with the optional pump marker, is BuyEr below.
 #[derive(Accounts)]
 pub struct TradeEr<'info> {
     /// NOT the wallet — the throwaway key open_trade_session pinned.
@@ -32,10 +33,20 @@ pub struct TradeEr<'info> {
     pub launch: Box<Account<'info, Launch>>,
 }
 
-/// buy = TradeEr + an optional trailing `pump` marker. Present (and
-/// non-empty) → the launch freezes at PUMP_GRADUATION_LAMPORTS. Omitted → the
-/// account resolves to None (anchor-lang `allow-missing-optionals`) and the
-/// 85 SOL line applies, so pre-existing clients keep working unchanged.
+/// buy = TradeEr + an optional trailing `pump` marker. The account resolves
+/// to None in exactly two cases (anchor-lang's `Option<T>::try_accounts`):
+/// the account list ends before it (`allow-missing-optionals`), or the key
+/// passed equals this program's own id — the sentinel every Anchor JS client
+/// emits for `pump: null`. Anything else is Some; an address that merely
+/// happens to be uninitialized fails with AccountNotInitialized (3012)
+/// rather than degrading to None.
+///
+/// Some → the launch freezes at PUMP_GRADUATION_LAMPORTS (1 SOL); the seeds
+/// constraint binds the marker to THIS launch. None → the 85 SOL
+/// GRADUATION_LAMPORTS line, so pre-existing 3-account clients keep working.
+///
+/// A non-pump launch must therefore omit the account or pass the program id
+/// — never the derived ["pump", launch_id] address, which does not exist.
 #[derive(Accounts)]
 pub struct BuyEr<'info> {
     /// NOT the wallet — the throwaway key open_trade_session pinned.

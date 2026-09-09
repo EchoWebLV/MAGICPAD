@@ -140,7 +140,7 @@ const tx = new Transaction().add(
     trader: wallet.publicKey, session, launch, systemProgram: SystemProgram.programId, gateSigner: wallet.publicKey,
   }).instruction(),
   await program.methods.buy(new BN(devBuy.toString())).accountsPartial({
-    sessionSigner: sk.publicKey, session, launch,
+    sessionSigner: sk.publicKey, session, launch, pump: null,
   }).instruction(),
   await program.methods.delegateLaunch(new BN(id)).accountsPartial({
     payer: wallet.publicKey, platform: PLATFORM, launch, ...delegationMetas(launch, 'Launch'),

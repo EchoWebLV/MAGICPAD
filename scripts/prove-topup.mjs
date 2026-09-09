@@ -189,7 +189,7 @@ console.log('\n━━ PHASE 2 · hit the wall (ER) ━━');
 const er = new Connection(await erFor(launch, 'launch'), 'confirmed');
 await erFor(session, 'session');
 const buyIx = (amt) => program.methods.buy(new BN(amt)).accountsPartial({
-  sessionSigner: sk.publicKey, session, launch,
+  sessionSigner: sk.publicKey, session, launch, pump: null,
 }).instruction();
 await sendEr(er, [await buyIx(B1)], sk, `buy ${sol(B1)} — the whole escrow`);
 console.log(`  bought ${sol(B1)} — escrow ceiling reached`);

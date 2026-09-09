@@ -163,7 +163,7 @@ await erAccount(er, session, 'session');
 
 // --- the flip: buy, then dump instantly — tax must appear in the ER ledger ---
 await sendEr(er, [await program.methods.buy(BUY1).accountsPartial({
-  sessionSigner: sk.publicKey, session, launch,
+  sessionSigner: sk.publicKey, session, launch, pump: null,
 }).instruction()], sk, `[4/7] ER buy ${sol(BUY1)}`);
 let erS = program.coder.accounts.decode('tradeSession', (await erAccount(er, session, 's')).data);
 let erL = program.coder.accounts.decode('launch', (await erAccount(er, launch, 'l')).data);
@@ -191,7 +191,7 @@ console.log(`      TAX CARVED IN THE ER: gross ${sol(outGross)} → seller ${sol
 
 // --- crossing buy freezes ---
 await sendEr(er, [await program.methods.buy(BUY2).accountsPartial({
-  sessionSigner: sk.publicKey, session, launch,
+  sessionSigner: sk.publicKey, session, launch, pump: null,
 }).instruction()], sk, `[6/7] ER buy ${sol(BUY2)} (crosses)`);
 erL = program.coder.accounts.decode('launch', (await erAccount(er, launch, 'l')).data);
 assert(erL.state === 1, `expected FROZEN, got ${erL.state}`);

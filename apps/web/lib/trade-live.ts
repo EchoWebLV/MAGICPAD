@@ -472,7 +472,7 @@ async function sendHealing(
 export async function buyLive(wallet: WalletLike, id: number, lamports: number): Promise<string> {
   const trader = wallet.publicKey!;
   return sendHealing(wallet, id, async (sk) => program.methods.buy(new BN(lamports)).accountsPartial({
-    sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id),
+    sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id), pump: null as any,
   }).instruction());
 }
 

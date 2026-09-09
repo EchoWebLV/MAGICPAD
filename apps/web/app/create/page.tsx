@@ -139,7 +139,7 @@ export default function Create() {
             gateSigner: gate.gateSigner,
           }).instruction(),
           await program.methods.buy(new BN(devLamports)).accountsPartial({
-            sessionSigner: sk.publicKey, session, launch,
+            sessionSigner: sk.publicKey, session, launch, pump: null as any,
           }).instruction(),
         );
         tx.add(

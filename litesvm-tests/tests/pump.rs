@@ -103,7 +103,7 @@ fn pump_buy_freezes_at_one_sol() {
     // 0.9 SOL: still bonding
     send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 900_000_000)]).unwrap();
     assert_eq!(read_launch(&svm, 0).state, BONDING);
-    // +0.2 SOL crosses 1 SOL → FROZEN (net of any fee, the line is on real_sol_raised)
+    // +0.2 SOL crosses 1 SOL → FROZEN
     send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 200_000_000)]).unwrap();
     let l = read_launch(&svm, 0);
     assert!(l.real_sol_raised >= PUMP_GRADUATION_LAMPORTS, "raised {}", l.real_sol_raised);
@@ -139,7 +139,7 @@ fn non_pump_launch_ignores_a_missing_marker() {
     // Option<Account> only resolves to None on true omission (a shorter
     // account list under allow-missing-optionals) or the program-id
     // sentinel — never merely because the PDA is uninitialized (verified
-    // against anchor-lang 1.1.2's Option<T>::try_accounts). So a client that
+    // against anchor-lang 1.0.2's Option<T>::try_accounts). So a client that
     // never enabled pump mode and simply omits the trailing account (the
     // ordinary buy_ix, same as every non-pump caller elsewhere in this
     // suite) keeps the 85 SOL line — that's the "missing marker" case.
@@ -168,5 +168,97 @@ fn non_pump_launch_ignores_a_missing_marker() {
     )
     .unwrap();
     let res = send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix_pump(&t.kb.pubkey(), &t.bob.pubkey(), 0, 100_000_000)]);
-    assert!(res.is_err(), "an uninitialized pump PDA must not silently resolve to None");
+    assert_anchor_error(res, 3012, "an uninitialized pump PDA is Some, not None (AccountNotInitialized)");
+}
+
+#[test]
+fn pump_marker_of_another_launch_is_rejected() {
+    // the security property is the seeds binding, not merely is_some(): a
+    // real, initialized pump marker that belongs to a DIFFERENT launch must
+    // still be rejected.
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(&mut svm, &t.creator, &[], &[create_launch_fair_ix(&t.creator.pubkey(), 1, "FAIREST", "FAIR")]).unwrap();
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 1)]).unwrap();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 2 * LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    let res = send(
+        &mut svm,
+        &t.cranker,
+        &[&t.ka],
+        &[buy_ix_trailing(&t.ka.pubkey(), &t.alice.pubkey(), 0, 100_000_000, &pump_pda(1))],
+    );
+    assert_anchor_error(res, 2006, "a marker for another launch fails the seeds constraint");
+}
+
+#[test]
+fn program_id_sentinel_means_no_marker() {
+    // the program id is the sentinel Anchor's JS client emits for `pump:
+    // null`; it reads as None → 85 SOL line.
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 2 * LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        &t.cranker,
+        &[&t.ka],
+        &[buy_ix_trailing(&t.ka.pubkey(), &t.alice.pubkey(), 0, 1_500_000_000, &program_id())],
+    )
+    .unwrap();
+    let l = read_launch(&svm, 0);
+    assert!(l.real_sol_raised >= PUMP_GRADUATION_LAMPORTS);
+    assert_eq!(l.state, BONDING, "program-id sentinel reads as None → 85 SOL line");
+}
+
+#[test]
+fn a_marker_carrying_buy_heals_a_drifted_pump_launch() {
+    // the drift (buy_without_the_marker_account_keeps_the_85_sol_line) closes
+    // as soon as any marker-carrying buy lands, without admin action.
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 2 * LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix(&t.ka.pubkey(), &t.alice.pubkey(), 0, 1_500_000_000)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, BONDING);
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 100_000_000)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, FROZEN);
+}
+
+#[test]
+fn pump_line_is_inclusive() {
+    // >=, exercised at equality.
+    let mut svm = fresh_svm();
+    let t = setup_table(&mut svm);
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 2 * LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 900_000_000)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, BONDING);
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 100_000_000)]).unwrap();
+    let l = read_launch(&svm, 0);
+    assert_eq!(l.real_sol_raised, PUMP_GRADUATION_LAMPORTS);
+    assert_eq!(l.state, FROZEN);
 }

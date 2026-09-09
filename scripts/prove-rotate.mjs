@@ -152,7 +152,7 @@ console.log('\n━━ PHASE 2 · key A trades (ER) ━━');
 const er = new Connection(await erFor(session, 'session'), 'confirmed');
 await erAccount(er, session, 'session');
 const buyIx = (signer, amt) => program.methods.buy(new BN(amt)).accountsPartial({
-  sessionSigner: signer.publicKey, session, launch,
+  sessionSigner: signer.publicKey, session, launch, pump: null,
 }).instruction();
 const sellIx = (signer, toks) => program.methods.sell(new BN(toks)).accountsPartial({
   sessionSigner: signer.publicKey, session, launch,
