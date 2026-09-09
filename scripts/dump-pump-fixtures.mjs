@@ -25,15 +25,15 @@ import {
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from '@solana/spl-token';
 
 const require = createRequire(import.meta.url);
-const sdk = require('@pump-fun/pump-sdk'); // CJS only — no ESM entry
+const sdk = require('@pump-fun/pump-sdk'); // ESM build is broken upstream (agent-payments-sdk imports named exports from CJS anchor) — load via require
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(root, 'litesvm-tests/fixtures');
 const PUMP = sdk.PUMP_PROGRAM_ID;
 const PFEE = sdk.PUMP_FEE_PROGRAM_ID;
-// upgradeable-loader programdata accounts (verified on mainnet)
-const PUMP_PROGRAMDATA = new PublicKey('B5MvUwXdiW1NMM6QFFD3ssPKBujD4zMohncbM73Z2BQu');
-const PFEE_PROGRAMDATA = new PublicKey('75Uu23mqWBb8LM8vDppqC1mQAnCcBuLXhVaDezVMQLRw');
+const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
+// upgradeable-loader programdata account = PDA([program_id], loader)
+const programdata = (p) => PublicKey.findProgramAddressSync([p.toBuffer()], LOADER)[0];
 // SDK's CURRENT_FEE_RECIPIENTS_FOR_BUYBACK[0]; a mainnet simulate with it returned err=null
 const BUYBACK = new PublicKey('5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD');
 const ELF_HEADER = 45; // UpgradeableLoaderState::ProgramData header before the ELF bytes
@@ -64,6 +64,9 @@ const acctBytes = (owner, lamports, data) => {
 async function dumpProgram(programdata, file) {
   const acc = await conn.getAccountInfo(programdata);
   if (!acc) throw new Error(`programdata ${programdata.toBase58()} not found`);
+  if (!acc.owner.equals(LOADER)) throw new Error(`${file}: ${programdata.toBase58()} owner ${acc.owner.toBase58()} is not the upgradeable loader`);
+  if (acc.data.readUInt32LE(0) !== 3) throw new Error(`${file}: not a ProgramData account (discriminant ${acc.data.readUInt32LE(0)})`);
+  if (!acc.data.subarray(ELF_HEADER, ELF_HEADER + 4).equals(Buffer.from('7f454c46', 'hex'))) throw new Error(`${file}: no ELF magic at offset ${ELF_HEADER}`);
   fs.writeFileSync(path.join(OUT, file), acc.data.subarray(ELF_HEADER));
   console.log(`${file}: ${acc.data.length - ELF_HEADER} bytes`);
 }
@@ -77,9 +80,12 @@ async function dumpAccount(address, file) {
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  await dumpProgram(PUMP_PROGRAMDATA, 'pump.so');
-  await dumpProgram(PFEE_PROGRAMDATA, 'pfee.so');
+  await dumpProgram(programdata(PUMP), 'pump.so');
+  await dumpProgram(programdata(PFEE), 'pfee.so');
   await dumpAccount(sdk.GLOBAL_PDA, 'global.acct');
+  // pump rejects a buyback recipient that is not in Global's list; the list can rotate upstream
+  const globalBytes = fs.readFileSync(path.join(OUT, 'global.acct'));
+  if (globalBytes.indexOf(BUYBACK.toBuffer()) === -1) throw new Error(`BUYBACK ${BUYBACK.toBase58()} is not in the captured global account — update the pin from the SDK's CURRENT_FEE_RECIPIENTS_FOR_BUYBACK`);
   await dumpAccount(sdk.PUMP_FEE_CONFIG_PDA, 'fee_config.acct');
   await dumpAccount(sdk.GLOBAL_VOLUME_ACCUMULATOR_PDA, 'gva.acct');
 
@@ -107,6 +113,7 @@ async function main() {
   });
   if (sim.value.err) throw new Error(`create simulation failed: ${JSON.stringify(sim.value.err)}\n${(sim.value.logs || []).join('\n')}`);
   const names = ['mint.acct', 'bonding_curve.acct', 'associated_bonding_curve.acct'];
+  if (!sim.value.accounts) throw new Error('RPC returned no accounts array — does it support simulateTransaction.accounts?');
   sim.value.accounts.forEach((a, i) => {
     if (!a) throw new Error(`${names[i]}: simulation returned no account`);
     fs.writeFileSync(path.join(OUT, names[i]), acctBytes(new PublicKey(a.owner), a.lamports, Buffer.from(a.data[0], 'base64')));
@@ -125,4 +132,4 @@ async function main() {
   console.log(`meta.txt written · mint ${mint.toBase58()} · creator ${creator.publicKey.toBase58()} · captured_at ${capturedAt}`);
 }
 
-main().catch((e) => { console.error(e.message ?? e); process.exit(1); });
+main().catch((e) => { console.error(e); process.exit(1); });
