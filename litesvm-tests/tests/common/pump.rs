@@ -250,6 +250,27 @@ pub fn create_ata_idempotent_ix(payer: &Address, owner: &Address, mint: &Address
     }
 }
 
+/// SPL Token `Transfer`, hand-built: the harness carries no spl-token crate.
+/// Data = [3] ‖ amount u64 LE; accounts source(W), destination(W), owner(S).
+pub fn spl_transfer_ix(
+    source: &Address,
+    destination: &Address,
+    owner: &Address,
+    amount: u64,
+) -> Instruction {
+    let mut data = vec![3u8];
+    data.extend_from_slice(&amount.to_le_bytes());
+    Instruction {
+        program_id: token_program_id(),
+        accounts: vec![
+            AccountMeta::new(*source, false),
+            AccountMeta::new(*destination, false),
+            AccountMeta::new_readonly(*owner, true),
+        ],
+        data,
+    }
+}
+
 /// The 18-account pump.fun `buy`. `user` pays and signs; tokens land in
 /// `ata_owner`'s ATA (pump does not require ata_owner == user).
 pub fn pump_buy_ix(

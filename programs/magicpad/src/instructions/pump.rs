@@ -10,7 +10,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::{self, AssociatedToken, Create};
 use anchor_spl::token::spl_token::instruction::AuthorityType;
-use anchor_spl::token::{self, Burn, CloseAccount, Mint, SetAuthority, Token};
+use anchor_spl::token::{self, Burn, CloseAccount, Mint, SetAuthority, Token, TokenAccount};
 
 use super::pump_vault::{
     claim_allowance, fund_vault, pot_available, sweep_vault, vault_buys, PumpSide, VaultBuy,
@@ -441,7 +441,11 @@ pub fn pump_graduate_handler(ctx: Context<PumpGraduate>, amount: u64, max_sol_co
         let need = max_sol_cost.checked_add(claim_allowance()?).ok_or(MagicPadError::Overflow)?;
         // the flip pot is spendable here (it is what graduation burns) — only
         // the launch's own rent is off limits, hence flip_pot = 0
-        require!(need <= pot_available(&launch_ai, 0)?, MagicPadError::PotTooSmall);
+        const NOTHING_RESERVED: i64 = 0;
+        require!(
+            need <= pot_available(&launch_ai, NOTHING_RESERVED)?,
+            MagicPadError::PotTooSmall
+        );
         fund_vault(&launch_ai, &vault, &system_ai, vault_seeds, need)?;
         associated_token::create_idempotent(CpiContext::new_with_signer(
             ctx.accounts.associated_token_program.key(),
@@ -468,6 +472,15 @@ pub fn pump_graduate_handler(ctx: Context<PumpGraduate>, amount: u64, max_sol_co
             amount,
             max_sol_cost,
         )?;
+        // burn EVERYTHING the vault's ATA holds, not just `amount`: the ATA
+        // address is ATA(vault, pump_mint) over two keys that are public from
+        // set_pump_mint on, so anyone may open it and park dust there — and a
+        // leftover balance makes close_account fail, jamming every
+        // `amount > 0` graduation of this launch for good.
+        let held = {
+            let d = vault_ata_ai.try_borrow_data()?;
+            TokenAccount::try_deserialize(&mut &d[..])?.amount
+        };
         token::burn(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.key(),
@@ -478,7 +491,7 @@ pub fn pump_graduate_handler(ctx: Context<PumpGraduate>, amount: u64, max_sol_co
                 },
                 &[vault_seeds],
             ),
-            amount,
+            held,
         )?;
         token::close_account(CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
@@ -490,6 +503,10 @@ pub fn pump_graduate_handler(ctx: Context<PumpGraduate>, amount: u64, max_sol_co
             &[vault_seeds],
         ))?;
         sweep_vault(&vault, &launch_ai, &system_ai, vault_seeds)?;
+    } else {
+        // nothing is bought, so a cap means nothing — bind it, so a CLI
+        // argument-order slip is an error instead of a silent no-op
+        require!(max_sol_cost == 0, MagicPadError::BadQuote);
     }
 
     // the Mooner mint never minted; lock it so it never can

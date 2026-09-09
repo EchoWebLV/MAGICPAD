@@ -878,8 +878,14 @@ fn pump_graduate_burns_the_remainder_and_revokes_the_mint() {
     let (t, pk) = all_claimed(&mut svm, &px);
     let vault = pump_launch_vault_pda(0);
     let vault_ata = ata_address(&vault, &pk.mint);
+    let cv = creator_vault_pda(&pk.creator);
     let supply_before = mint_supply(&svm, &pk.mint);
+    let launch_before = lamports(&svm, &launch_pda(0));
     let platform_before = lamports(&svm, &platform_pda());
+    let bc_before = lamports(&svm, &px.bonding_curve);
+    let fee_before = lamports(&svm, &pk.fee_recipient);
+    let bb_before = lamports(&svm, &pk.buyback);
+    let cv_before = lamports(&svm, &cv);
     let amount = 5_000_000_000_000u64; // 5M tokens
     send(
         &mut svm,
@@ -892,7 +898,18 @@ fn pump_graduate_burns_the_remainder_and_revokes_the_mint() {
     assert_eq!(l.state, GRADUATED);
     let rent_min = svm.minimum_balance_for_rent_exemption(svm.get_account(&launch_pda(0)).unwrap().data.len());
     assert_eq!(lamports(&svm, &launch_pda(0)), rent_min, "launch keeps only its rent");
-    assert!(lamports(&svm, &platform_pda()) > platform_before, "residue went to the platform");
+    // every lamport that left the launch landed somewhere nameable: the
+    // platform's residue plus the four pump-side accounts the buy pays. The
+    // ATA rent nets out (the vault fronts it, close_account gives it back).
+    assert_eq!(
+        launch_before - lamports(&svm, &launch_pda(0)),
+        (lamports(&svm, &platform_pda()) - platform_before)
+            + (lamports(&svm, &px.bonding_curve) - bc_before)
+            + (lamports(&svm, &pk.fee_recipient) - fee_before)
+            + (lamports(&svm, &pk.buyback) - bb_before)
+            + (lamports(&svm, &cv) - cv_before),
+        "every lamport that left the launch is accounted for"
+    );
     assert_eq!(mint_supply(&svm, &pk.mint), supply_before - amount, "bought tokens were burnt");
     assert_eq!(lamports(&svm, &vault_ata), 0, "vault ata closed");
     assert_eq!(lamports(&svm, &vault), 0, "vault swept");
@@ -964,6 +981,9 @@ fn pump_graduate_spends_the_flip_pot_of_a_fairest_launch() {
     assert_eq!(read_launch(&svm, 1).state, GRADUATED);
     assert_eq!(lamports(&svm, &launch_pda(1)), rent_min, "pot and dust both left the launch");
     assert_eq!(mint_supply(&svm, &pk.mint), supply_before - g_amount, "bought tokens were burnt");
+    let g_vault = pump_launch_vault_pda(1);
+    assert_eq!(lamports(&svm, &g_vault), 0, "vault swept");
+    assert_eq!(lamports(&svm, &ata_address(&g_vault, &pk.mint)), 0, "vault ata closed");
 }
 
 #[test]
@@ -984,8 +1004,251 @@ fn pump_graduate_rejections() {
     // pot too small for the burn buy
     let res = send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 1_000_000_000_000, 5 * LAMPORTS_PER_SOL)]);
     assert_pad_error(res, E_POT_TOO_SMALL, "5 SOL max on a ~0.3 SOL remainder");
+    // a cap with nothing to buy: the argument is bound, not ignored, so a CLI
+    // argument-order slip is an error rather than a silent no-op
+    let res = send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 1)]);
+    assert_pad_error(res, E_BAD_QUOTE, "a cap with nothing to buy");
     send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 0)]).unwrap();
     svm.expire_blockhash();
     let res = send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 0)]);
     assert_pad_error(res, E_NOT_GRADUATABLE, "already graduated");
+}
+
+#[test]
+fn pump_graduate_burns_dust_parked_in_the_vault_ata() {
+    // The launch vault's ATA is ATA(["pumpvault", launch_id], pump_mint) —
+    // both keys are public from set_pump_mint on, so anyone holding one raw
+    // unit (every claimed holder does) can open that ATA and park dust in it.
+    // Burning only `amount` would leave the dust behind and close_account
+    // would fail ("Non-native account can only be closed if its balance is
+    // zero"), jamming every amount > 0 graduation of this launch forever —
+    // the admin's only exit would be amount = 0, which hands the whole
+    // remainder to the platform instead of the curve. So the burn takes
+    // whatever the ATA holds.
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = all_claimed(&mut svm, &px);
+    let alice = t.alice.pubkey();
+    let alice_ata = ata_address(&alice, &pk.mint);
+    let vault = pump_launch_vault_pda(0);
+    let vault_ata = ata_address(&vault, &pk.mint);
+    assert!(token_amount(&svm, &alice_ata) > 1, "alice has tokens to donate");
+
+    // alice opens the vault's ATA out of her own pocket and parks one raw unit
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[
+            create_ata_idempotent_ix(&alice, &vault, &pk.mint),
+            spl_transfer_ix(&alice_ata, &vault_ata, &alice, 1),
+        ],
+    )
+    .unwrap();
+    assert_eq!(token_amount(&svm, &vault_ata), 1, "dust is parked in the vault's ata");
+
+    let supply_before = mint_supply(&svm, &pk.mint);
+    let amount = 5_000_000_000_000u64; // 5M tokens
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, amount, 300_000_000)],
+    )
+    .unwrap();
+    assert_eq!(
+        supply_before - mint_supply(&svm, &pk.mint),
+        amount + 1,
+        "the buy AND the parked dust were burnt"
+    );
+    assert_eq!(lamports(&svm, &vault_ata), 0, "the vault's ata is closed, dust and all");
+    assert_eq!(lamports(&svm, &vault), 0, "vault swept");
+    assert_eq!(read_launch(&svm, 0).state, GRADUATED);
+    assert_eq!(mint_authority_opt(&svm, &mint_pda(0)), None, "Mooner mint revoked");
+}
+
+#[test]
+fn pump_graduate_rejects_a_wrong_vault_ata() {
+    // index 6 is vault_ata. The handler pins it by ATA derivation over BOTH
+    // the vault's key and pump_mint, ahead of `need`, the pot bound and every
+    // lamport move — so a substituted ATA costs the launch nothing.
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = all_claimed(&mut svm, &px);
+    let launch_before = lamports(&svm, &launch_pda(0));
+    // 0 admin 1 platform 2 launch 3 pump 4 mooner mint 5 vault 6 vault_ata 7 pump_mint
+    let mut ix = pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 5_000_000_000_000, 300_000_000);
+    ix.accounts[6].pubkey = ata_address(&t.bob.pubkey(), &pk.mint);
+    let res = send(&mut svm, &t.admin, &[], &[ix]);
+    assert_pad_error(res, E_BAD_PUMP_ACCOUNT, "bob's ata instead of the vault's");
+    assert_eq!(lamports(&svm, &launch_pda(0)), launch_before, "not a lamport moved");
+    assert_eq!(read_launch(&svm, 0).state, RECONCILED, "still not graduated");
+}
+
+#[test]
+fn pump_graduate_on_a_launch_nobody_traded() {
+    // the FROZEN half of Launch::is_settled(): sessions_reconciled ==
+    // sessions_opened == 0. Nothing was ever bought, so there is nothing to
+    // buy back and nothing to burn — but the launch still has to reach its
+    // terminal state, hand the residue over and seal the Mooner mint.
+    // Mirrors pump_claim_on_a_launch_nobody_traded.
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let t = setup_pump_table(&mut svm, &px);
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    let alice = t.alice.pubkey();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&alice, 0, &t.ka.pubkey(), LAMPORTS_PER_SOL)],
+    )
+    .unwrap();
+    // no buy ever priced the curve, so the janitor freeze is the only way out
+    send(&mut svm, &t.admin, &[], &[freeze_launch_ix(&t.admin.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[set_pump_mint_ix(&t.admin.pubkey(), 0, &px.mint, &px.bonding_curve)],
+    )
+    .unwrap();
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&alice, 0)]).unwrap();
+    let l = read_launch(&svm, 0);
+    assert_eq!(l.state, FROZEN, "a never-traded session leaves the state alone");
+    assert_eq!(l.sessions_opened, 0);
+    assert_eq!(l.sessions_reconciled, 0, "0 == 0 is what makes the launch settled");
+    assert_eq!(read_pump(&svm, 0).claims_done, 0, "so the claims gate is 0 == 0 too");
+
+    let pk = PumpKeys::from(&px);
+    let launch_before = lamports(&svm, &launch_pda(0));
+    let platform_before = lamports(&svm, &platform_pda());
+    send(&mut svm, &t.admin, &[], &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 0, 0)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, GRADUATED);
+    let rent_min =
+        svm.minimum_balance_for_rent_exemption(svm.get_account(&launch_pda(0)).unwrap().data.len());
+    assert_eq!(lamports(&svm, &launch_pda(0)), rent_min, "launch keeps only its rent");
+    assert_eq!(
+        lamports(&svm, &platform_pda()) - platform_before,
+        launch_before - rent_min,
+        "the residue went to the platform"
+    );
+    assert_eq!(mint_authority_opt(&svm, &mint_pda(0)), None, "Mooner mint revoked");
+}
+
+#[test]
+fn pump_claim_after_pump_graduate_is_closed() {
+    // GRADUATED is neither RECONCILED nor FROZEN, so is_settled() is false
+    // and pump_claim's LAUNCH-level gate fires ahead of the session-level
+    // AlreadyClaimed. Nobody is stranded by it: pump_graduate could not have
+    // run at all unless every session with sol_spent > 0 was already claimed.
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let (t, pk) = all_claimed(&mut svm, &px);
+    let alice = t.alice.pubkey();
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 5_000_000_000_000, 300_000_000)],
+    )
+    .unwrap();
+    assert_eq!(read_launch(&svm, 0).state, GRADUATED);
+    let held = token_amount(&svm, &ata_address(&alice, &pk.mint));
+    let res = send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[pump_claim_ix(&t.admin.pubkey(), &alice, 0, &pk, 1, 1_000_000)],
+    );
+    assert_pad_error(res, E_LAUNCH_NOT_RECONCILED, "the launch is terminal, not settled");
+    assert_eq!(
+        token_amount(&svm, &ata_address(&alice, &pk.mint)),
+        held,
+        "her balance is untouched"
+    );
+}
+
+#[test]
+fn a_never_traded_session_reconciles_after_pump_graduate() {
+    // A session that only deposited escrows its SOL in its OWN pda and is
+    // never counted in sessions_opened, so the launch reconciles, claims and
+    // graduates without it. reconcile_trade_session takes any state >= FROZEN
+    // and GRADUATED is 3, so the deposit still walks home afterwards: net is
+    // 0, the whole deposit goes to the trader and the pda keeps its rent.
+    let mut svm = fresh_svm();
+    let Some(px) = load_pump(&mut svm) else { return };
+    let t = setup_pump_table(&mut svm, &px);
+    // carol must open BEFORE the freezing buy — open_trade_session needs BONDING
+    let carol = Keypair::new();
+    let kc = Keypair::new();
+    svm.airdrop(&carol.pubkey(), 5 * LAMPORTS_PER_SOL).unwrap();
+    const CAROL_DEPOSIT: u64 = 300_000_000;
+    send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.alice,
+        &[],
+        &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 1_200_000_000)],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        &t.bob,
+        &[],
+        &[open_trade_session_ix(&t.bob.pubkey(), 0, &t.kb.pubkey(), 500_000_000)],
+    )
+    .unwrap();
+    send(
+        &mut svm,
+        &carol,
+        &[],
+        &[open_trade_session_ix(&carol.pubkey(), 0, &kc.pubkey(), CAROL_DEPOSIT)],
+    )
+    .unwrap();
+    // bob in and straight out; alice's buy crosses the 1 SOL line
+    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix_pump(&t.kb.pubkey(), &t.bob.pubkey(), 0, 100_000_000)]).unwrap();
+    let held = read_session(&svm, 0, &t.bob.pubkey()).tokens_held;
+    send(&mut svm, &t.cranker, &[&t.kb], &[sell_ix(&t.kb.pubkey(), &t.bob.pubkey(), 0, held)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 1_100_000_000)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, FROZEN);
+    assert_eq!(read_launch(&svm, 0).sessions_opened, 2, "carol never bought");
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.bob.pubkey(), 0)]).unwrap();
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 0)]).unwrap();
+    assert_eq!(read_launch(&svm, 0).state, RECONCILED);
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[set_pump_mint_ix(&t.admin.pubkey(), 0, &px.mint, &px.bonding_curve)],
+    )
+    .unwrap();
+    let pk = PumpKeys::from(&px);
+    let amount = ceiling_of(read_session(&svm, 0, &t.alice.pubkey()).tokens_held) / 2;
+    send(&mut svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &t.alice.pubkey(), 0, &pk, amount, 700_000_000)]).unwrap();
+    send(&mut svm, &t.admin, &[], &[pump_claim_ix(&t.admin.pubkey(), &t.bob.pubkey(), 0, &pk, 0, 0)]).unwrap();
+    send(
+        &mut svm,
+        &t.admin,
+        &[],
+        &[pump_graduate_ix(&t.admin.pubkey(), 0, &pk, 5_000_000_000_000, 300_000_000)],
+    )
+    .unwrap();
+    assert_eq!(read_launch(&svm, 0).state, GRADUATED);
+
+    let session = session_pda(0, &carol.pubkey());
+    let s_rent =
+        svm.minimum_balance_for_rent_exemption(svm.get_account(&session).unwrap().data.len());
+    assert_eq!(lamports(&svm, &session), s_rent + CAROL_DEPOSIT, "rent + escrow, untouched");
+    let carol_before = lamports(&svm, &carol.pubkey());
+    send(&mut svm, &t.cranker, &[], &[reconcile_ix(&carol.pubkey(), 0)]).unwrap();
+    assert_eq!(
+        lamports(&svm, &carol.pubkey()) - carol_before,
+        CAROL_DEPOSIT,
+        "the whole deposit walks home — net is 0, and the crank pays the fee"
+    );
+    assert_eq!(lamports(&svm, &session), s_rent, "rent stays with the pda; it is not closed");
+    assert!(read_session(&svm, 0, &carol.pubkey()).reconciled);
+    assert_eq!(read_launch(&svm, 0).sessions_reconciled, 2, "she never traded, so she never counts");
+    assert_eq!(read_launch(&svm, 0).state, GRADUATED, "and the terminal state is untouched");
 }
