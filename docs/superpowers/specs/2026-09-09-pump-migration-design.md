@@ -55,9 +55,13 @@ signed by a unique PDA, never via a transfer or airdrop.
   creator. The program reads `Rent::get()`; nothing is hard-coded.
 - v1 `create` (14 accounts, classic Token program) costs 19,389,173 lamports of
   rent + fees and ≈104k CU on mainnet; `create_v2` mints Token-2022 with
-  `ImmutableOwner` ATAs and is **not** used. `create` + ATA + `buy` +
-  `close_user_volume_accumulator` ≈ 221k CU → every CLI transaction sets a
-  400k CU limit.
+  `ImmutableOwner` ATAs and is **not** used. Compute, measured against the real
+  mainnet ELF (`litesvm-tests/tests/pump.rs`, `compute_units_consumed`): a funded
+  `pump_claim` runs **139,997–168,497 CU** over 20 runs (mean 148,247 — the
+  spread is `find_program_address` bump-search depth at 1,500 CU per failed step,
+  every sample congruent to 497 mod 1,500), `pump_graduate` **145,861**, a flat
+  claim **27,310** → every CLI transaction sets a 400k CU limit, **2.37×** the
+  observed worst case.
 - Pump curve constants == Mooner's: virtual 30 SOL / 1.073e15, real 793.1T, supply
   1e15, 6 decimals. Constant-product ⇒ SOL raised determines tokens sold
   (path-independent), so replaying Mooner's final ledger onto a fresh pump curve
@@ -356,6 +360,7 @@ whose `pump_mint` is set.
 ```
 node scripts/migrate-pump.mjs 7            # dry run (default): the CA, per-holder amounts + quotes; sends nothing
 node scripts/migrate-pump.mjs 7 --confirm  # sends — the operator runs this by hand, never an agent
+node scripts/migrate-pump.mjs 7 --only <trader> --amount <raw> --max-sol <lamports>  # one stuck holder: crank at an operator-chosen size, then rerun without flags
 ```
 
 Steps per launch: (1) require every session reconciled (`sessions_reconciled ==
@@ -368,7 +373,12 @@ lookup the web's `metadata.ts` does), mint keypair generated and persisted to
 `creator = launch.creator`, `user` = keeper; (3) `set_pump_mint`; (4) `pump_claim`
 per session in ascending avg-cost order with `amount` from the budget rule above
 and `max_sol_cost` = the session's pro-rata budget (the quote is taken at
-budget − 0.5%, so the cap has headroom); sessions with `sol_spent > 0` and
+budget − 0.5%, so the cap has headroom) — the pot is re-read before **every**
+claim and the slice retaken across the holders still waiting, so the slack a
+claim leaves behind (the refunded `user_volume_accumulator` rent, and landing
+under the cap) reaches them instead of being burnt at graduation; the dry run
+cannot know that slack, so its per-holder budgets are a **floor** and its token
+counts are a curve-advanced estimate rather than a live quote; sessions with `sol_spent > 0` and
 `tokens_held == 0` get the bookkeeping claim (`amount = 0`); sessions that never
 bought (`sol_spent == 0`) are skipped — `sessions_opened` never counted them; (5) `pump_graduate` with the pot quote, or
 `amount = 0` when the pot is under 0.01 SOL; (6) append to
