@@ -585,6 +585,18 @@ pub struct TopUpMirror {
     pub bump: u8,
 }
 
+#[derive(borsh::BorshDeserialize, Debug)]
+pub struct PumpLaunchMirror {
+    pub launch_id: u64,
+    pub pump_mint: [u8; 32],
+    pub claims_done: u64,
+    pub bump: u8,
+}
+
+pub fn read_pump(svm: &LiteSVM, id: u64) -> PumpLaunchMirror {
+    read_account(svm, &pump_pda(id))
+}
+
 pub fn read_account<T: borsh::BorshDeserialize>(svm: &LiteSVM, addr: &Address) -> T {
     let acc = svm.get_account(addr).expect("account exists");
     // deserialize the PREFIX only: anchor pads String fields to max_len,
@@ -672,6 +684,17 @@ pub fn warp_past_window(svm: &mut LiteSVM) {
 // ---------- the entry gate (UI-only door) ----------
 
 pub const E_GATE_REQUIRED: u32 = 23;
+pub const E_PUMP_MODE: u32 = 24;
+pub const E_PUMP_MINT_NOT_SET: u32 = 25;
+pub const E_PUMP_MINT_ALREADY_SET: u32 = 26;
+pub const E_WRONG_PUMP_MINT: u32 = 27;
+pub const E_PUMP_CLAIMS_OUTSTANDING: u32 = 28;
+pub const E_POT_TOO_SMALL: u32 = 29;
+pub const E_CLAIM_TOO_LARGE: u32 = 30;
+pub const E_BAD_PUMP_ACCOUNT: u32 = 31;
+pub const E_PUMP_TOO_LATE: u32 = 32;
+pub const PUMP_GRADUATION_LAMPORTS: u64 = 1_000_000_000; // mirrors constants.rs
+pub const PUMP_HAIRCUT_BPS: u64 = 150;
 
 pub fn gate_pda() -> Address {
     Address::find_program_address(&[b"gate"], &program_id()).0

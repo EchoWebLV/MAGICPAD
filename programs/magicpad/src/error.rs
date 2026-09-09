@@ -51,4 +51,22 @@ pub enum MagicPadError {
     TaxTooHigh, // 6022
     #[msg("entry is gated — the platform co-signature is missing")]
     GateRequired, // 6023
+    #[msg("this launch graduates on pump.fun — use pump_claim / pump_graduate")]
+    PumpMode, // 6024
+    #[msg("pump mint not set yet")]
+    PumpMintNotSet, // 6025
+    #[msg("pump mint already set")]
+    PumpMintAlreadySet, // 6026
+    #[msg("pump mint does not match this launch")]
+    WrongPumpMint, // 6027
+    #[msg("pump claims still outstanding")]
+    PumpClaimsOutstanding, // 6028
+    #[msg("launch pot cannot cover this pump buy")]
+    PotTooSmall, // 6029
+    #[msg("claim exceeds the session's share")]
+    ClaimTooLarge, // 6030
+    #[msg("pump account does not match its derivation")]
+    BadPumpAccount, // 6031
+    #[msg("pump mode must be enabled before the first trade")]
+    PumpTooLate, // 6032
 }

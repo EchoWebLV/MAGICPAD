@@ -111,3 +111,16 @@ pub struct Gate {
     pub key: Pubkey,
     pub bump: u8,
 }
+
+// pump.fun mode marker. Created by the launch creator before the first
+// trade; pump_mint is set by the admin once the CLI has created the pump
+// token; claims_done counts pump_claim for every session that traded
+// (mirrors sessions_opened), so pump_graduate knows nobody is left behind.
+#[account]
+#[derive(InitSpace)]
+pub struct PumpLaunch {
+    pub launch_id: u64,
+    pub pump_mint: Pubkey, // Pubkey::default() until set_pump_mint
+    pub claims_done: u64,
+    pub bump: u8,
+}

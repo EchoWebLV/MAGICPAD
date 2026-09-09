@@ -21,3 +21,10 @@ pub const BPS_DENOM: u16 = 10_000;
 // and shipping to the Meteora seed at graduation. Flippers fund the pool.
 pub const FLIP_TAX_START_BPS: u16 = 2_500; // 25% on an instant flip
 pub const FLIP_DECAY_SECS: u64 = 1_800; // fades to zero over 30 minutes
+
+// pump.fun mode: the launch freezes at 1 SOL and every holder is bought
+// onto pump.fun by the program (scripts/migrate-pump.mjs cranks it).
+pub const PUMP_SEED: &[u8] = b"pump"; // PumpLaunch PDA per launch — its presence IS the mode
+pub const PUMP_VAULT_SEED: &[u8] = b"pumpvault"; // signing vaults: [seed, id, trader] per claim, [seed, id] for graduate
+pub const PUMP_GRADUATION_LAMPORTS: u64 = 1_000_000_000; // 1 SOL
+pub const PUMP_HAIRCUT_BPS: u16 = 150; // a claim buys at most 98.5% of tokens_held — pump's fee + slippage room

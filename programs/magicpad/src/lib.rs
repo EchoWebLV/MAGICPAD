@@ -6,6 +6,7 @@ pub mod curve;
 pub mod error;
 pub mod fair;
 pub mod instructions;
+pub mod pump_cpi;
 pub mod state;
 
 use instructions::*;
