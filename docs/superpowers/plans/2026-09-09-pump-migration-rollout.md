@@ -69,20 +69,25 @@ anchor build
 solana program deploy --program-id <PROGRAM_ID> target/deploy/magicpad.so --upgrade-authority <AUTHORITY_KEYPAIR> --url <RPC_URL>
 ```
 
-```bash
-anchor idl upgrade <PROGRAM_ID> --filepath target/idl/magicpad.json --provider.cluster <RPC_URL> --provider.wallet <IDL_AUTHORITY_KEYPAIR>
-```
-
 `Anchor.toml:18-19` defaults the cluster to devnet and the wallet to
-`~/.config/solana/id.json`, so both are passed explicitly — if the IDL
-authority is the deploy key rather than the default wallet, the bare command
-fails or writes an orphan buffer. `upgrade` also presumes an IDL account
-already exists; the first publish is `anchor idl init` ("Can only be run
-once"). Check which applies first:
+`~/.config/solana/id.json`, so both are passed explicitly in the two commands
+that follow — if the IDL authority is the deploy key rather than the default
+wallet, the bare command fails or writes an orphan buffer. `upgrade` also
+presumes an IDL account already exists; the first publish is
+`anchor idl init` ("Can only be run once"). Check which applies before running
+either:
 
 ```bash
 anchor idl authority <PROGRAM_ID> --provider.cluster <RPC_URL>
 ```
+
+With an IDL account already published, upgrade it:
+
+```bash
+anchor idl upgrade <PROGRAM_ID> --filepath target/idl/magicpad.json --provider.cluster <RPC_URL> --provider.wallet <IDL_AUTHORITY_KEYPAIR>
+```
+
+Without one, publish it once:
 
 ```bash
 anchor idl init <PROGRAM_ID> --filepath target/idl/magicpad.json --provider.cluster <RPC_URL> --provider.wallet <IDL_AUTHORITY_KEYPAIR>
@@ -91,11 +96,11 @@ anchor idl init <PROGRAM_ID> --filepath target/idl/magicpad.json --provider.clus
 At `anchor-cli 0.31.1` (`anchor --version`) `idl upgrade` is "an alias for
 first writing and then then setting the idl buffer account", so the
 83,884-byte IDL needs no separate `write-buffer` / `set-buffer` step — the
-single command above is right. And nothing in this tree reads the on-chain
-IDL: the web bundles `apps/web/lib/idl-v3.json` (`apps/web/lib/core.ts:25`,
-`new PublicKey((idl as any).address)`) and every script reads
-`target/idl/magicpad.json` from disk. This step serves explorers and third
-parties; it does not gate the canary.
+single `anchor idl upgrade` command above is right. And nothing in this tree
+reads the on-chain IDL: the web bundles `apps/web/lib/idl-v3.json`
+(`apps/web/lib/core.ts:25`, `new PublicKey((idl as any).address)`) and every
+script reads `target/idl/magicpad.json` from disk. This step serves explorers
+and third parties; it does not gate the canary.
 
 **Order the window.** The commands above are steps 2 and 3 of five.
 
@@ -175,24 +180,50 @@ node scripts/migrate-pump.mjs <id>
 ```
 
    **What a healthy dry run prints**, in order — literal template text from
-   the CLI's own `console.log`s, `${…}` placeholders included:
+   the CLI's own log lines, `${…}` placeholders included:
 
    - `keeper ${keeper.publicKey.toBase58()} · ${conn.rpcEndpoint} · launch ${id} · ${confirm ? 'CONFIRM' : 'dry run'}`
      (`scripts/migrate-pump.mjs:247`)
+   - `new mint keypair persisted at ${path.relative(root, file)}` (`:195`) —
+     printed by `loadOrMakeMint()`, called at `:277`, and only on the run that
+     generates the file: a rerun reads the existing one and says nothing
+     (`:190-192`), and a pinned launch never calls it at all (`:277`,
+     `pinned ? null : loadOrMakeMint()`).
    - `CA (pump.fun mint): ${pumpMint.toBase58()}`, then `creator:` and
      `name/symbol:        ${l.name} / ${l.symbol}` (`:296-298`)
+   - `metadata ${uri}` (`:370`) — the positive half of step 2's metadata
+     check; its failure twin is the `die` immediately above it (`:368-369`).
+   - `[dry] would ${curve ? '' : 'create the pump token and '}set_pump_mint (${signers.length} signer(s))`
+     (`:413`) — the phase-1 line, printed on the dry-run side of the
+     `if (confirm)` at `:406`. This is the line that says the CA is armed to be
+     minted one-shot. It and the `metadata` line above it are both inside
+     `if (!pinned)` (`:362`), so an already-pinned launch prints neither and
+     prints
+     `pump mint already set on chain: ${pumpMint.toBase58()} — the keypair file is not needed from here`
+     (`:416`) instead.
    - `pot ${sol(claimPot0)} for claims (launch − rent − flip pot ${sol(flipPot)}), ${sol(gradPot0)} for graduation · ${holders.length} holder(s), ${flat.length} flat, ${skipped} never traded · already claimed …`
      (`:442`)
-   - the four-line dry-run disclaimer, closing `first a FLOOR, not a promise.`
-     (`:454-458`)
+   - the five-line dry-run disclaimer, closing `first a FLOOR, not a promise.`
+     (`:454-458`; `:454` also emits the leading blank line)
    - one line per holder:
      `${s.trader.toBase58()}  held ${tok(s.tokensHeld)} (${share}%)  budget ${sol(budget)}  → buy ${tok(amount)} ${l.symbol}`
      (`:596-597`)
    - one line per flat session:
      `${s.trader.toBase58()}  flat (sold out)  → bookkeeping claim` (`:649`)
-   - `graduate: ${remainderLabel} → buy + burn ≥ ${tok(gAmount)} ${l.symbol} ≤ ${sol(gMax)}, residue → platform, Mooner mint sealed`
-     (`:710`)
+   - `graduate: ${remainderLabel} → …, residue → platform, Mooner mint sealed`
+     (`:710`), whose middle is a ternary on `gAmount.isZero()`: it prints
+     `no burn buy (${why})` when the CLI's own quote comes out zero, and
+     `buy + burn ≥ ${tok(gAmount)} ${l.symbol} ≤ ${sol(gMax)}` when it does
+     not. Both are healthy — the zero half is §3's escape hatch, reached
+     without the operator doing anything.
    - `[dry] nothing sent. Rerun with --confirm to execute.` (`:712`)
+
+   Six of those go through `log()` (`:145`,
+   `console.log(new Date().toISOString().slice(11, 19), …)`) and so carry an
+   `HH:MM:SS ` prefix on screen that the templates above do not show: `:195`,
+   `:247`, `:370`, `:413`, `:442`, and the pinned-run `:416`. The rest —
+   `:296-298`, `:454-458`, `:596-597`, `:649`, `:710`, `:712` — are raw
+   `console.log` and carry no prefix.
 
    Five preconditions `die` before the CA ever prints. The one the only
    mainnet dry run hit was the marker check —
@@ -216,7 +247,7 @@ node scripts/migrate-pump.mjs <id>
      pro-rata over the holders still waiting (`:529-543`). Each claim's
      unspent slack therefore flows to the holders behind it, so **every
      per-holder budget the dry run prints except the first is a floor, not a
-     promise** — the dry run says so itself (`:453-458`).
+     promise** — the dry run says so itself (`:454-458`).
    - The dry run's token estimates come from one preview curve advanced
      locally by each planned buy (`:481-517`); the live run re-quotes against
      the real curve before each send.
@@ -233,6 +264,15 @@ node scripts/migrate-pump.mjs <id>
      that would not leave every waiting holder its allowance (`:574-582`);
      above the session's fair pro-rata share it prints a capitalised warning
      that the difference is final for the holders still waiting (`:583-588`).
+   - **Phase 3's two numbers are the CLI's, not the operator's.** After the
+     last claim it takes the graduation pot (re-read live under `--confirm`,
+     predicted in a dry run — `:691`), subtracts one claim allowance, and buys
+     at all only if what is left clears `MIN_GRADUATE_BUY`, 10,000,000
+     lamports (`:695`, `:78`). The cap is that remainder (`:696`); the amount
+     is a quote against the curve with `SLACK_BPS` shaved off (`:697-698`,
+     `SLACK_BPS = 50` at `:77`). Below the floor, or on a quote that comes
+     back zero, both stay zero (`:692-693`, `:699-704`) and the run reports
+     `no burn buy (${why})` (`:710`).
    - The sessions-vs-claims coverage guard runs **before the first send**,
      ahead of `create` + `set_pump_mint` (`:353-359`), so a missing session
      PDA is caught before the CA is public and pinned one-shot.
@@ -319,8 +359,8 @@ node scripts/migrate-pump.mjs <id> --only <TRADER> --amount <RAW_TOKENS> --max-s
     here and nowhere else.
 - **`pump_graduate` with `amount = 0` (and `max_sol_cost = 0`) is the escape
   hatch for phase 3 — but only once every session has claimed.** A completed
-  curve, a repriced curve, a `TooMuchSolRequired` on the graduate buy: pass
-  zero and the launch still reaches GRADUATED, with the remainder going **to
+  curve, a repriced curve, a `TooMuchSolRequired` on the graduate buy: on
+  `(0, 0)` the launch still reaches GRADUATED, with the remainder going **to
   the platform, not into the curve**. On the zero branch `max_sol_cost` must
   also be 0 or the instruction fails `BadQuote`
   (`programs/magicpad/src/instructions/pump.rs:509`). It does **not** bypass
@@ -330,6 +370,32 @@ node scripts/migrate-pump.mjs <id> --only <TRADER> --amount <RAW_TOKENS> --max-s
   `pump.rs:249`). One un-landable claim blocks graduation **permanently**. The
   only lever there is a **smaller `amount`** — see the override recovery
   above.
+  - **The operator never passes those zeros; the CLI arrives at them on its
+    own.** `gAmount` and `gMax` start at zero
+    (`scripts/migrate-pump.mjs:692-693`) and stay there unless the graduation
+    pot minus one claim allowance clears `MIN_GRADUATE_BUY`, 10,000,000
+    lamports (`:695`, `:78`); and if the quote against the curve comes back
+    zero, the cap is zeroed with it (`:699-704` — the comment there names
+    `pump.rs:509` as the reason). Either way the run says so, as
+    `no burn buy (${why})` (`:710`). So two of the three cases this bullet
+    names — a completed curve and a repriced one too thin to buy — are
+    already handled with no operator input.
+  - **There is no graduate override flag.** `USAGE` is
+    `usage: node scripts/migrate-pump.mjs <launch id> [--confirm] [--only <trader> [--amount <raw tokens> --max-sol <lamports>]]`
+    (`:96-97`). `--amount`/`--max-sol` require `--only` (`:120`), and `--only`
+    returns before phase 3 (`:662-667`). Nothing on the command line sets
+    `pump_graduate`'s two arguments.
+  - **A `TooMuchSolRequired` on the graduate buy: rerun.** That send carries
+    no catch (`:718-722`), so the error ends the run through `main().catch`
+    (`:738`). The rerun is safe — the three phases are "each idempotent on
+    rerun", in §2's own words — and phase 3 re-quotes against the live curve
+    on a `--confirm` run (`:697`,
+    `const curve = confirm ? await liveCurve() : previewCurve;`), so the next
+    attempt prices against the curve as it then is.
+  - **If it keeps failing, this branch ships nothing further.** Rerunning is
+    the only in-CLI lever for a graduate buy that will not land. A hand-sent
+    `pump_graduate(0, 0)` — the program's own escape hatch, above — would be
+    outside this CLI, and no tool for it exists in this tree. Recorded in §5.
 - **The graduate burns whatever the vault ATA holds**, not `amount`
   (`programs/magicpad/src/instructions/pump.rs:476-495`: it deserialises the
   ATA and burns `held`). The ATA address is derivable from public state from
@@ -384,6 +450,14 @@ node scripts/migrate-pump.mjs <id> --only <TRADER> --amount <RAW_TOKENS> --max-s
   bets its residue on the opposite, and the conservation test shows direct
   credit to `platform` commits exactly, to the lamport. One of the two is
   wrong. Resolve it — without touching the working path.
+- **A graduate buy that keeps failing has no in-CLI lever.** The
+  `pump_graduate` send has no catch (`scripts/migrate-pump.mjs:718-722`) and
+  no flag sets its two arguments (`:96-97`), so the only recovery this branch
+  ships for a repeated `TooMuchSolRequired` on the burn buy is rerunning the
+  CLI, which re-quotes against the live curve (`:697`). The program's own
+  escape hatch, `pump_graduate(0, 0)`, would have to be sent by hand from
+  outside this tree. Decide before mainnet whether that is acceptable or
+  whether phase 3 needs an explicit zero-buy path of its own.
 - **pump `buy` under-delivery near a complete curve is unverified.** None of
   the 40 tests in `litesvm-tests/tests/pump.rs` covers a buy that fills fewer
   tokens than `amount` on a nearly complete curve. `burn(held)` is safe
