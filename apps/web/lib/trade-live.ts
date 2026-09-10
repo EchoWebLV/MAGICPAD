@@ -30,8 +30,11 @@ const PROGRAM_ERROR_TEXT: Record<number, string> = {
   6002: 'deposit is below the minimum',
   6003: 'that order is bigger than your free escrow, retry and it will top up first',
   6004: 'you are selling more tokens than you hold',
+  6008: 'this session has not settled yet, claims open after reconciliation',
+  6009: 'those tokens are already in the wallet — a cranker claimed them first',
   6010: 'trade key out of sync with this market, retry and it will re-sync',
   6011: 'the curve rejected that size, try a different amount',
+  6012: 'nothing left to claim on this session',
   6013: 'ledger guard tripped, refresh and retry',
   6017: 'settlement pot not ready yet',
   6018: 'that top-up was already applied',
@@ -518,7 +521,11 @@ export async function readPumpLaunch(id: number): Promise<PumpView | null | unde
     }
     pumpMemo.set(id, { view, at: Date.now() });
     return view;
-  } catch { return hit ? hit.view : undefined; } // existence never changes — the last answer stands
+  } catch { // existence never changes — the last answer stands; a concurrent read
+    // may have corrected the memo while this one failed, so ask the memo again
+    const now = pumpMemo.get(id) ?? hit;
+    return now ? now.view : undefined;
+  }
 }
 
 /** One refusal, one wording: quickBuy asks before the trader spends and
@@ -663,9 +670,9 @@ export async function claimTokens(wallet: WalletLike, id: number, trader: Public
     associatedTokenProgram: ATA_PROGRAM,
     systemProgram: SystemProgram.programId,
   }).instruction();
-  // the claim can trip pump-side codes (6024 PumpMode, 6033 LaunchNotReconciled);
-  // route them through the same map the trade card's errors use, so no hex
-  // reaches the button's error line.
+  // claim_tokens can trip 6024 PumpMode, 6008 NotReconciled, 6009 AlreadyClaimed
+  // (a cranker got there first) and 6012 NothingToClaim; route them through the
+  // same map the trade card's errors use, so no hex reaches the button's error line.
   try { return await sendWithWallet(wallet, new Transaction().add(ix)); }
   catch (e) { throw humanizeTradeError(e); }
 }
