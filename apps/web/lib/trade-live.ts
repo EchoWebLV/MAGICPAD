@@ -481,25 +481,34 @@ async function sendHealing(
 
 export interface PumpView { pumpMint: string | null }
 
-/* The pump marker, read once and remembered. It decides the graduation
+/* The pump.fun marker, read once and remembered. It decides the graduation
  * line, so a failed read must never read as "no marker" — callers get
- * `undefined` and keep whatever they already knew.
+ * `undefined` ONLY when nothing was ever read for this launch.
  *
- * The memo rules come from the program: absence is final (enable_pump
- * wants an untraded, NOT-yet-delegated launch — instructions/pump.rs:31-40,
- * 52-58 — and the create tx delegates in the same transaction, so a launch
- * that has no marker can never grow one), a pinned pump_mint is final
- * (set_pump_mint is one-shot, pump.rs:104), and a marker whose mint is
- * still unset is re-read on the same 45s L1 gate as history.ts:63. */
+ * The memo rules come from the program. A pinned pump_mint is final
+ * (set_pump_mint is one-shot, pump.rs:104), so that answer is served for
+ * the page's life. Everything else — an absent marker, or one whose mint
+ * is still unset — is re-checked on the same 45s L1 gate as history.ts:63:
+ * absence is NOT trusted for the session, because a load-balanced endpoint
+ * can answer a second request from a node that has not seen the create tx
+ * yet, and a wrong `null` would put the buy on the standard line.
+ *
+ * A FAILED re-check keeps the last answer instead of erasing it. Whether
+ * the marker EXISTS cannot change once the create tx has landed: enable_pump
+ * wants an untraded, NOT-yet-delegated launch (instructions/pump.rs:31-40,
+ * 52-58) and the create tx delegates in the same transaction, so a launch
+ * with no marker can never grow one and one with a marker can never lose
+ * it. A stale view can therefore be wrong about nothing but pump_mint —
+ * at worst the pump.fun link is missing for a moment. */
 const PUMP_MEMO_MS = 45_000;
 const pumpMemo = new Map<number, { view: PumpView | null; at: number }>();
 
-/** The pump marker's contents, `null` for a Meteora launch, `undefined`
- *  when the read failed — the caller holds its last known answer. */
+/** The marker's contents, `null` for a Meteora launch, `undefined` only
+ *  when this launch has never been read and the read failed. */
 export async function readPumpLaunch(id: number): Promise<PumpView | null | undefined> {
   if (CLUSTER !== 'mainnet') return null; // the devnet program has no marker
   const hit = pumpMemo.get(id);
-  if (hit && (hit.view === null || hit.view.pumpMint || Date.now() - hit.at <= PUMP_MEMO_MS)) return hit.view;
+  if (hit && (hit.view?.pumpMint || Date.now() - hit.at <= PUMP_MEMO_MS)) return hit.view;
   try {
     const a = await connection.getAccountInfo(pumpPda(id));
     let view: PumpView | null = null;
@@ -509,8 +518,13 @@ export async function readPumpLaunch(id: number): Promise<PumpView | null | unde
     }
     pumpMemo.set(id, { view, at: Date.now() });
     return view;
-  } catch { return undefined; } // read or decode failed — memo untouched
+  } catch { return hit ? hit.view : undefined; } // existence never changes — the last answer stands
 }
+
+/** One refusal, one wording: quickBuy asks before the trader spends and
+ *  buyLive asks again before it builds, so the two must not drift. */
+const pumpUnreadable = (id: number) =>
+  new Error(`could not check whether launch ${id} graduates on pump.fun — retry the buy`);
 
 export async function buyLive(wallet: WalletLike, id: number, lamports: number): Promise<string> {
   const trader = wallet.publicKey!;
@@ -523,7 +537,7 @@ export async function buyLive(wallet: WalletLike, id: number, lamports: number):
   // A read that FAILED must not become a wrong-line buy: the standard line
   // on a 1◎ launch bonds straight past it. Refuse and let them retry.
   const pv = await readPumpLaunch(id);
-  if (pv === undefined) throw new Error(`could not read the pump marker for launch ${id} — retry the buy`);
+  if (pv === undefined) throw pumpUnreadable(id);
   const pump = { pump: pv ? pumpPda(id) : (null as any) };
   return sendHealing(wallet, id, async (sk) => program.methods.buy(new BN(lamports)).accountsPartial({
     sessionSigner: sk.publicKey, session: sessionPda(id, trader), launch: launchPda(id), ...pump,
@@ -552,6 +566,11 @@ export async function quickBuy(
 ): Promise<string> {
   const trader = wallet.publicKey;
   if (!trader) throw new Error('connect a wallet first');
+  // the one question that can REFUSE is asked before the escrow legs: a
+  // marker we cannot read costs a click, never a signature and an L1
+  // deposit the trader then has to retry into. buyLive asks again and hits
+  // the memo this filled.
+  if ((await readPumpLaunch(id)) === undefined) throw pumpUnreadable(id);
   let pos: PositionView | null = null;
   try { pos = await readPosition(trader, id); } catch { /* unknown — ensure covers it */ }
   if (!pos) {
@@ -624,7 +643,7 @@ const ata = (owner: PublicKey, mint: PublicKey) =>
   )[0];
 
 /** Permissionless crank: mint the ledger claim into the trader's ATA.
- *  v3 (mainnet) also reads the pump marker — it must be empty; the devnet
+ *  v3 (mainnet) also reads the pump.fun marker — it must be empty; the devnet
  *  program predates it. The marker is a REQUIRED account, so it only
  *  reaches the wire once idl-v3.json is regenerated (Task 10) — Anchor
  *  drops keys the IDL does not list — and the program upgrade and the web
@@ -644,7 +663,11 @@ export async function claimTokens(wallet: WalletLike, id: number, trader: Public
     associatedTokenProgram: ATA_PROGRAM,
     systemProgram: SystemProgram.programId,
   }).instruction();
-  return sendWithWallet(wallet, new Transaction().add(ix));
+  // the claim can trip pump-side codes (6024 PumpMode, 6033 LaunchNotReconciled);
+  // route them through the same map the trade card's errors use, so no hex
+  // reaches the button's error line.
+  try { return await sendWithWallet(wallet, new Transaction().add(ix)); }
+  catch (e) { throw humanizeTradeError(e); }
 }
 
 /** Live curve state for one launch — ER when dark, L1 when home. */

@@ -142,11 +142,13 @@ export default function LaunchPage() {
     if (id === null) return;
     const [r, p, h, pv] = await Promise.all([
       readLaunchLive(id).catch(() => null),
-      // undefined = the read FAILED this tick (an ER hiccup for the session,
-      // an L1 one for the pump marker); null = the chain positively says no
-      // session / no marker. Only the latter may clear the panel or move the
-      // graduation line — readPumpLaunch answers undefined on its own and
-      // memoises, so it neither needs a catch nor reads every tick.
+      // undefined = the read FAILED (an ER hiccup for the session; for the
+      // marker, a failed read AND nothing ever read for this launch — a
+      // failed re-read keeps the last answer inside readPumpLaunch itself);
+      // null = the chain positively says no session / no marker. Only the
+      // latter may clear the panel or move the graduation line.
+      // readPumpLaunch answers undefined on its own and memoises, so it
+      // neither needs a catch nor reads every tick.
       publicKey ? readPosition(publicKey, id).catch(() => undefined) : Promise.resolve(null),
       fetchHistory(id).catch(() => null),
       readPumpLaunch(id),
@@ -154,7 +156,9 @@ export default function LaunchPage() {
     const hold = pendingRef.current;
     const caught = !hold || posCaughtUp(p, hold.pos);
     // hold the last known marker rather than repainting a pump launch as a
-    // Meteora one for a tick — wrong line, wrong chip, claim button back
+    // Meteora one for a tick — wrong line, wrong chip, claim button back.
+    // Only the first tick of a page can land here now; after one good read
+    // the reader holds its own answer through a blip.
     const pump = pv === undefined ? (live?.pump ? { pumpMint: live.pumpMint } : null) : pv;
     // a fill we just painted must not lose to a stale ER read — hold the
     // curve and the position until this trader's session has moved, not
