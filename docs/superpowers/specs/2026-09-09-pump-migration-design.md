@@ -345,8 +345,8 @@ pump_graduate"), `PumpMintNotSet` (pump mint not set yet), `PumpMintAlreadySet`
 (the pin is one-shot), `WrongPumpMint` (pump mint does not match this launch),
 `PumpClaimsOutstanding` (pump claims still outstanding), `PotTooSmall` (the
 launch pot cannot cover this pump buy), `ClaimTooLarge` (claim exceeds the
-session's share), `BadPumpAccount` (a pump account does not match its
-derivation), `PumpTooLate` (pump mode must be enabled before the first trade),
+session's share), `BadPumpAccount` (pump-side account is not the one this
+launch expects), `PumpTooLate` (pump mode must be enabled before the first trade),
 `LaunchNotReconciled` (a claim on a launch whose sessions have not all
 settled).
 

@@ -850,7 +850,7 @@ with
     PotTooSmall, // 6029
     #[msg("claim exceeds the session's share")]
     ClaimTooLarge, // 6030
-    #[msg("pump account does not match its derivation")]
+    #[msg("pump-side account is not the one this launch expects")]
     BadPumpAccount, // 6031
     #[msg("pump mode must be enabled before the first trade")]
     PumpTooLate, // 6032
