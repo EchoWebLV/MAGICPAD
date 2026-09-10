@@ -170,7 +170,7 @@ spl-token display <MOONER_MINT>
   (`scripts/migrate-pump.mjs:615-643`) — it does not loop.
 - **A crank that *succeeds* with too small an `amount` is final for that
   session.** `session.tokens_claimed = true` is set unconditionally
-  (`programs/magicpad/src/instructions/pump.rs:305`); there is no top-up
+  (`programs/magicpad/src/instructions/pump.rs:301`); there is no top-up
   path. A holder underpaid by a landed claim stays underpaid.
 - Pot too thin to claim at all (`quotes 0 tokens`): the launch stays
   RECONCILED; `freeze_launch` is not needed (it is already frozen). The
@@ -226,7 +226,7 @@ spl-token display <MOONER_MINT>
 
 ## 5. Open items before mainnet
 
-- **`reconcile.rs:223-225` contradicts `pump_graduate`.** That comment says
+- **`reconcile.rs:232-235` contradicts `pump_graduate`.** That comment says
   a direct `+=` on a program-owned account "doesn't commit in this runtime"
   and routes the platform tax through a system transfer; `pump_graduate`
   bets its residue on the opposite, and the conservation test shows direct
@@ -283,7 +283,7 @@ spl-token display <MOONER_MINT>
   fall into `default: break` and the launch page's activity list shows
   nothing for the whole migration.
 - **One failed first marker read paints a pump launch as a Meteora one.**
-  `apps/web/app/launch/[id]/page.tsx:160-161` holds the last good answer
+  `apps/web/app/launch/[id]/page.tsx:162` holds the last good answer
   (`pv === undefined ? (live?.pump ? … : null) : pv`), but on a freshly
   opened page `live` is `null`, so there is no previous answer to hold and
   the fallback is `null` — the Meteora line, the wrong chip, the claim button

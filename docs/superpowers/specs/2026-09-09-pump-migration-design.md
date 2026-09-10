@@ -331,7 +331,7 @@ Open items from the Task 7 review, both to resolve before mainnet:
   `pump_graduate`'s `claims_done == sessions_opened` gate turns a
   per-session block into a whole-launch brick, so this branch must not reach
   mainnet before Task 8.
-- `reconcile.rs:223-225` states that a direct `+=` on a program-owned
+- `reconcile.rs:232-235` states that a direct `+=` on a program-owned
   account "doesn't commit in this runtime" and routes the platform tax
   through a system transfer; `pump_graduate` bets its residue on the
   opposite, and the conservation test shows that direct credit to `platform`
