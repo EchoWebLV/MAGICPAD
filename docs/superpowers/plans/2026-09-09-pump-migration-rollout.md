@@ -2,7 +2,8 @@
 
 Everything below is user-run. Nothing here is executed by an agent.
 
-Written against `pump-migration` at `b8604d7`. Line citations are that tree.
+Written against `pump-migration`. Code cites are against `b8604d7`; commits
+since are docs-only.
 
 ## 1. Program upgrade (mainnet)
 
@@ -19,9 +20,12 @@ path (`litesvm-tests/tests/pump.rs`,
 `non_pump_launch_ignores_a_missing_marker`).
 
 Because that account is required rather than optional, **the old keeper and
-the old web fail on every `claim_tokens`** the moment the new program is
-live — they do not send the key at all. So the web deploy and the keeper
-restart happen in the same window as the program upgrade, not after it.
+the old web fail on every `claim_tokens` and every `graduate`** the moment
+the new program is live — they do not send the key at all. The account is on
+both instructions (`programs/magicpad/src/instructions/reconcile.rs:128` and
+`:198`), and both handlers require it empty (`:149` and `:214`). So the web
+deploy and the keeper restart are not a follow-up to the program upgrade:
+they are steps 4 and 5 of the ordered window below.
 `apps/web/lib/idl-v3.json` is the regenerated IDL (Task 10); the devnet demo
 IDL is untouched.
 
@@ -48,6 +52,15 @@ line needs no env — it is fixed in code (`PUMP_GRADUATION_LAMPORTS`,
 `apps/web/lib/core.ts:35`). As of this tree
 `grep -c '^NEXT_PUBLIC_GRADUATION_LAMPORTS=' apps/web/.env.local` prints `0`.
 
+The keeper needs the same number in its own env. `scripts/keeper.mjs:44` reads
+`GRADUATION_LAMPORTS` with the same 5◎ fallback (`:43` — "devnet demo default;
+mainnet ops pass GRADUATION_LAMPORTS=85000000000") and gates graduation on it
+at `:241`, so the keeper process must carry
+`GRADUATION_LAMPORTS=85000000000` alongside the web's
+`NEXT_PUBLIC_GRADUATION_LAMPORTS=85000000000`. Both are the 85◎ line in a
+different process; the pump line is fixed in code on both sides and needs no
+env in either.
+
 ```bash
 anchor build
 ```
@@ -57,24 +70,86 @@ solana program deploy --program-id <PROGRAM_ID> target/deploy/magicpad.so --upgr
 ```
 
 ```bash
-anchor idl upgrade <PROGRAM_ID> --filepath target/idl/magicpad.json --provider.cluster <RPC_URL>
+anchor idl upgrade <PROGRAM_ID> --filepath target/idl/magicpad.json --provider.cluster <RPC_URL> --provider.wallet <IDL_AUTHORITY_KEYPAIR>
 ```
 
-Then deploy the web and restart the keeper.
+`Anchor.toml:18-19` defaults the cluster to devnet and the wallet to
+`~/.config/solana/id.json`, so both are passed explicitly — if the IDL
+authority is the deploy key rather than the default wallet, the bare command
+fails or writes an orphan buffer. `upgrade` also presumes an IDL account
+already exists; the first publish is `anchor idl init` ("Can only be run
+once"). Check which applies first:
+
+```bash
+anchor idl authority <PROGRAM_ID> --provider.cluster <RPC_URL>
+```
+
+```bash
+anchor idl init <PROGRAM_ID> --filepath target/idl/magicpad.json --provider.cluster <RPC_URL> --provider.wallet <IDL_AUTHORITY_KEYPAIR>
+```
+
+At `anchor-cli 0.31.1` (`anchor --version`) `idl upgrade` is "an alias for
+first writing and then then setting the idl buffer account", so the
+83,884-byte IDL needs no separate `write-buffer` / `set-buffer` step — the
+single command above is right. And nothing in this tree reads the on-chain
+IDL: the web bundles `apps/web/lib/idl-v3.json` (`apps/web/lib/core.ts:25`,
+`new PublicKey((idl as any).address)`) and every script reads
+`target/idl/magicpad.json` from disk. This step serves explorers and third
+parties; it does not gate the canary.
+
+**Order the window.** The commands above are steps 2 and 3 of five.
+
+1. **Stop the keeper**, before the program deploy. From the moment the new
+   program is live the old keeper fails every `claim_tokens` and every
+   `graduate` — noisily, but for free: it sends with `skipPreflight: false`
+   (`scripts/keeper.mjs:120`), so the broken transactions are rejected at
+   preflight and never land, and `withRetry` gives up after three attempts and
+   logs (`:100-111`). A log storm here costs nothing.
+2. **Deploy the program** — `anchor build`, then `solana program deploy`.
+3. **`anchor idl upgrade`** (or `init`, per the authority check above).
+4. **Deploy the web**, with `NEXT_PUBLIC_GRADUATION_LAMPORTS=85000000000` in
+   its env.
+5. **Start the keeper last**, on the regenerated IDL and with
+   `GRADUATION_LAMPORTS=85000000000` in its env.
+
+The keeper and `migrate-pump.mjs` read `target/idl/magicpad.json`
+(`scripts/keeper.mjs:34`, `scripts/migrate-pump.mjs:54`), which is a build
+artifact — `target/` is gitignored (`.gitignore:1`). Wherever the keeper runs,
+it must restart against the **regenerated** IDL: either `anchor build` on that
+host, or copy the tracked `apps/web/lib/idl-v3.json` over
+`target/idl/magicpad.json` (byte-identical at this commit, 83,884 bytes both).
+A keeper restarted on the old IDL cannot place the `pump` key and fails every
+`claim_tokens` and every `graduate` exactly as the un-restarted one does — the
+same failure, wearing the disguise of a successful restart.
 
 ## 2. Canary
 
+The CLI reports launch state as a bare number:
+`0 BONDING → 1 FROZEN (at 1◎) → 2 RECONCILED (keeper) → 3 GRADUATED (phase 3)`
+(`apps/web/lib/magicpad.ts:107`, `programs/magicpad/src/state.rs:37-40`).
+
 1. Create a launch with "graduate on pump.fun at 1◎" ticked. The create tx
    builds `create_launch` → `enable_pump` → `delegate_launch` in that order
-   (`apps/web/app/create/page.tsx:121`, `:129`, `:154`/`:163`): the marker
-   must exist before the first trade or `enable_pump` refuses with
-   `PumpTooLate` (6032), and it must exist before delegation because
-   `enable_pump` wants a not-yet-delegated launch.
+   (`apps/web/app/create/page.tsx:121`, `:129`, `:163`): the marker must
+   exist before the first trade or `enable_pump` refuses with `PumpTooLate`
+   (6032), and it must exist before delegation because `enable_pump` wants a
+   not-yet-delegated launch.
 2. Give it a face. `migrate-pump.mjs` refuses a launch with no
    creator-signed metadata memo (`scripts/migrate-pump.mjs:368-369`).
 3. Buy past 1 SOL from two wallets, and sell one of them out entirely — the
    flat (bought, then sold everything) path is worth covering, since it takes
-   a different branch (`amount = 0`, no vault, no CPI).
+   a different branch (`amount = 0`, no vault, no CPI). **A pump launch has no
+   creator first buy**: ticking the pump box forces `devLamports = 0`
+   (`apps/web/app/create/page.tsx:83`) and greys out the dev-buy controls
+   (`:216`, `:223`, `:233`), so the whole 1◎ has to come from the trading
+   wallets — an operator planning a creator buy will otherwise find the field
+   disabled mid-canary. Note also that the launch creator need not be the
+   platform admin: `enable_pump` wants the *creator's* signature
+   (`programs/magicpad/src/instructions/pump.rs:30`, constraint
+   `launch.creator == creator.key()` at `:38`), while phase 1's pump `create`
+   is signed by the keeper with `creator` carried as a data field
+   (`scripts/migrate-pump.mjs:398`, `user: keeper.publicKey`). Two different
+   wallets, both fine.
 4. Wait for the keeper. It reconciles every session and then stops, printing
    (`scripts/keeper.mjs:223`, verbatim):
 
@@ -89,12 +164,47 @@ Then deploy the web and restart the keeper.
    cluster; `CU_PRICE` sets the priority fee (default 50,000 µlamports).
 
 6. Dry run. It sends nothing and prints the CA — the mint from
-   `scripts/pump-mints/<id>.json`, generated and persisted before anything is
-   sent — before any other work (`scripts/migrate-pump.mjs:296`):
+   `scripts/pump-mints/<id>.json`, generated and persisted **before anything
+   is sent** (`scripts/migrate-pump.mjs:277`, `loadOrMakeMint()`, ahead of the
+   `--confirm` branch) — after the preconditions, which can stop the run
+   before any CA is printed (`:251`, `:253`, `:256`, `:266`, `:268`; the CA
+   itself prints at `:296`):
 
 ```bash
 node scripts/migrate-pump.mjs <id>
 ```
+
+   **What a healthy dry run prints**, in order — literal template text from
+   the CLI's own `console.log`s, `${…}` placeholders included:
+
+   - `keeper ${keeper.publicKey.toBase58()} · ${conn.rpcEndpoint} · launch ${id} · ${confirm ? 'CONFIRM' : 'dry run'}`
+     (`scripts/migrate-pump.mjs:247`)
+   - `CA (pump.fun mint): ${pumpMint.toBase58()}`, then `creator:` and
+     `name/symbol:        ${l.name} / ${l.symbol}` (`:296-298`)
+   - `pot ${sol(claimPot0)} for claims (launch − rent − flip pot ${sol(flipPot)}), ${sol(gradPot0)} for graduation · ${holders.length} holder(s), ${flat.length} flat, ${skipped} never traded · already claimed …`
+     (`:442`)
+   - the four-line dry-run disclaimer, closing `first a FLOOR, not a promise.`
+     (`:454-458`)
+   - one line per holder:
+     `${s.trader.toBase58()}  held ${tok(s.tokensHeld)} (${share}%)  budget ${sol(budget)}  → buy ${tok(amount)} ${l.symbol}`
+     (`:596-597`)
+   - one line per flat session:
+     `${s.trader.toBase58()}  flat (sold out)  → bookkeeping claim` (`:649`)
+   - `graduate: ${remainderLabel} → buy + burn ≥ ${tok(gAmount)} ${l.symbol} ≤ ${sol(gMax)}, residue → platform, Mooner mint sealed`
+     (`:710`)
+   - `[dry] nothing sent. Rerun with --confirm to execute.` (`:712`)
+
+   Five preconditions `die` before the CA ever prints. The one the only
+   mainnet dry run hit was the marker check —
+   `launch ${id} has no pump marker — it graduates on Meteora (scripts/migrate.mjs)`
+   (`:253`) — which means the CLI was pointed at a Meteora launch, not that
+   anything broke. The other four are
+   `keeper is not the platform admin (${platform.admin.toBase58()})` (`:251`),
+   `launch ${id} is still bonding (state ${l.state})` (`:256`),
+   `${pending.length} session(s) not reconciled yet — the keeper does that; rerun afterwards`
+   (`:266`), and
+   `launch not settled: ${l.sessionsReconciled}/${l.sessionsOpened} sessions reconciled`
+   (`:268`).
 
    **What the CLI does, as it stands at `b8604d7`** (header comment
    `scripts/migrate-pump.mjs:1-33`, usage line `:96-97`):
@@ -148,8 +258,9 @@ node scripts/migrate-pump.mjs <id> --confirm
 8. Verify, before calling it live: `getSignaturesForAddress` on the pump mint
    shows the create + buys; `https://frontend-api-v3.pump.fun/coins/<CA>`
    returns the coin; the launch page shows `PUMP.FUN` and the link; each
-   trader's wallet holds the pump token; the Mooner mint's authority is
-   `None`.
+   trader's wallet holds the pump token; the launch reads state 3, which is
+   the CLI's own closing assertion (`scripts/migrate-pump.mjs:733-735`); the
+   Mooner mint's authority is `None`.
 
 ```bash
 spl-token display <MOONER_MINT>
@@ -168,21 +279,57 @@ spl-token display <MOONER_MINT>
   and a pump-side failure rolls the whole instruction back. The CLI catches
   `PotTooSmall`, **re-quotes and re-slices once**, and then stops loudly
   (`scripts/migrate-pump.mjs:615-643`) — it does not loop.
+- **A claim that will not land at the pro-rata budget: crank it alone with
+  smaller numbers.**
+
+```bash
+node scripts/migrate-pump.mjs <id> --only <TRADER> --amount <RAW_TOKENS> --max-sol <LAMPORTS>
+```
+
+  That replaces the budget rule for that one session and skips graduation
+  (`scripts/migrate-pump.mjs:116-127`, `:663-665`); rerun without flags once
+  every session has claimed. This is the lever for a `TooMuchSolRequired` on a
+  claim — the CLI retries `PotTooSmall` only (`:616`,
+  `if (!isProgramError(e, E_POT_TOO_SMALL)) throw e;`), so any other pump-side
+  error stops the run on the spot — and for a `PotTooSmall` that survived the
+  one re-slice, and for a budget that quotes 0 tokens because it is too thin.
+  The CLI enforces the program's own bounds before it sends (`:555-558`,
+  `:559-562`, `:574-582`) and shouts when the number is above the session's
+  fair share (`:583-588`) — that difference is final for the holders still
+  waiting.
 - **A crank that *succeeds* with too small an `amount` is final for that
   session.** `session.tokens_claimed = true` is set unconditionally
   (`programs/magicpad/src/instructions/pump.rs:301`); there is no top-up
   path. A holder underpaid by a landed claim stays underpaid.
-- Pot too thin to claim at all (`quotes 0 tokens`): the launch stays
-  RECONCILED; `freeze_launch` is not needed (it is already frozen). The
-  admin can `pump_graduate` only after every claim, so the pot stays in the
-  launch PDA until the numbers work — there is no drain path.
-- **`pump_graduate` with `amount = 0` (and `max_sol_cost = 0`) is the
-  universal escape hatch** — a completed curve, a repriced curve, a
-  `TooMuchSolRequired`: pass zero and the launch still reaches GRADUATED.
-  The remainder then goes **to the platform, not into the curve**. On the
-  zero branch `max_sol_cost` must also be 0, or the instruction fails
-  `BadQuote`. `pump_claim` has no equivalent for a session with
-  `tokens_held > 0`, so a stuck pump curve strands claims, not graduation.
+- **`quotes 0 tokens` has three causes, and only one of them waits.**
+  `zeroQuoteWhy` (`scripts/migrate-pump.mjs:475-478`) prints one of three
+  reasons: the budget is `too thin to buy a single token`, `the curve has
+  completed`, or `the curve has migrated off pump.fun`.
+  - **Too thin.** The launch stays RECONCILED; `freeze_launch` is not needed
+    (it is already frozen). The admin can `pump_graduate` only after every
+    claim, so the pot stays in the launch PDA until the numbers work — there
+    is no drain path. A smaller `amount` under `--only` is the lever (above).
+  - **Completed, or migrated off pump.fun.** Terminal for any funded session
+    that has not yet claimed. That curve can never fill the claim, `amount = 0`
+    is refused on a funded session
+    (`programs/magicpad/src/instructions/pump.rs:249`), and graduation stays
+    gated on `claims_done == sessions_opened` (`:415-418`). The pot stays in
+    the launch PDA and **there is no path to GRADUATED** — not "until the
+    numbers work"; ever. If that is a state this branch accepts, it is accepted
+    here and nowhere else.
+- **`pump_graduate` with `amount = 0` (and `max_sol_cost = 0`) is the escape
+  hatch for phase 3 — but only once every session has claimed.** A completed
+  curve, a repriced curve, a `TooMuchSolRequired` on the graduate buy: pass
+  zero and the launch still reaches GRADUATED, with the remainder going **to
+  the platform, not into the curve**. On the zero branch `max_sol_cost` must
+  also be 0 or the instruction fails `BadQuote`
+  (`programs/magicpad/src/instructions/pump.rs:509`). It does **not** bypass
+  an outstanding claim: the completeness gate runs before the `amount` branch
+  (`pump.rs:415-418`, ahead of `if amount > 0` at `:426`), and `pump_claim`
+  has no zero escape for a funded session (`require!(amount > 0, BadQuote)`,
+  `pump.rs:249`). One un-landable claim blocks graduation **permanently**. The
+  only lever there is a **smaller `amount`** — see the override recovery
+  above.
 - **The graduate burns whatever the vault ATA holds**, not `amount`
   (`programs/magicpad/src/instructions/pump.rs:476-495`: it deserialises the
   ATA and burns `held`). The ATA address is derivable from public state from
@@ -206,10 +353,15 @@ spl-token display <MOONER_MINT>
   the marker — assert the FIRST buy lands (not a retry) and that a 1 SOL buy
   freezes (`scripts/prove-buy-deploy.mjs` is the closest harness to extend).
   Every failure mode is fail-closed (tx error or AccountNotInitialized);
-  none silently falls back to the 85 SOL line. The tx to reproduce is the one
-  the create page already builds: `create_launch` → `enable_pump` →
-  `delegate_launch` (`apps/web/app/create/page.tsx:121`, `:129`,
-  `:154`/`:163`).
+  none silently falls back to the 85 SOL line.
+  The production shape is `create_launch` → `enable_pump` → `delegate_launch`
+  in **one** transaction (`apps/web/app/create/page.tsx:121`, `:129`, `:163`),
+  with the first ER buy in a **later** slot from a different wallet. Ticking
+  the pump box forces `devLamports = 0` (`:83`), so the buy-and-deploy branch
+  — where `buy` with `pump: null` (`:149-150`) and its own `delegate_launch`
+  (`:154`) live — is unreachable for a pump launch. The same-tx
+  `create + enable_pump + open_trade_session + delegate` variant above is the
+  stricter extra case, not the shape production emits.
 
 ## 4. What never changes
 
