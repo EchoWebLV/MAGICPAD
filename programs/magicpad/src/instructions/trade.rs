@@ -41,7 +41,7 @@ pub struct TradeEr<'info> {
 /// happens to be uninitialized fails with AccountNotInitialized (3012)
 /// rather than degrading to None.
 ///
-/// Some → the launch freezes at PUMP_GRADUATION_LAMPORTS (1 SOL); the seeds
+/// Some → the launch freezes at PUMP_GRADUATION_LAMPORTS (0.2 SOL); the seeds
 /// constraint binds the marker to THIS launch. None → the 85 SOL
 /// GRADUATION_LAMPORTS line, so pre-existing 3-account clients keep working.
 ///

@@ -24,7 +24,7 @@ pub const GRADUATION_LAMPORTS: u64 = 85_000_000_000; // mirrors constants.rs —
 pub const MIN_DEPOSIT: u64 = 10_000_000;
 pub const FLIP_TAX_START_BPS: u64 = 2_500; // fairest mode: 25% on an instant flip
 pub const FLIP_DECAY_SECS: i64 = 1_800; // fades to zero over 30 minutes
-pub const PUMP_GRADUATION_LAMPORTS: u64 = 1_000_000_000; // mirrors constants.rs
+pub const PUMP_GRADUATION_LAMPORTS: u64 = 200_000_000; // mirrors constants.rs
 pub const PUMP_HAIRCUT_BPS: u64 = 150; // u16 in constants.rs; widened here so test arithmetic needs no cast
 
 // launch states

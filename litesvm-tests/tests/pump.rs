@@ -86,10 +86,10 @@ fn enable_pump_works_on_a_fair_launch() {
     assert_eq!(p.pump_mint, [0u8; 32]);
 }
 
-// ---- the 1 SOL line -------------------------------------------------------
+// ---- the pump line (PUMP_GRADUATION_LAMPORTS) -------------------------------------------------------
 
 #[test]
-fn pump_buy_freezes_at_one_sol() {
+fn pump_buy_freezes_at_the_pump_line() {
     let mut svm = fresh_svm();
     let t = setup_table(&mut svm);
     send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 0)]).unwrap();
@@ -100,11 +100,11 @@ fn pump_buy_freezes_at_one_sol() {
         &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 2 * LAMPORTS_PER_SOL)],
     )
     .unwrap();
-    // 0.9 SOL: still bonding
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 900_000_000)]).unwrap();
+    // 90% of the line: still bonding
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, PUMP_GRADUATION_LAMPORTS * 9 / 10)]).unwrap();
     assert_eq!(read_launch(&svm, 0).state, BONDING);
-    // +0.2 SOL crosses 1 SOL → FROZEN
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 200_000_000)]).unwrap();
+    // +20% crosses the line → FROZEN
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, PUMP_GRADUATION_LAMPORTS / 5)]).unwrap();
     let l = read_launch(&svm, 0);
     assert!(l.real_sol_raised >= PUMP_GRADUATION_LAMPORTS, "raised {}", l.real_sol_raised);
     assert!(l.real_sol_raised < GRADUATION_LAMPORTS);
@@ -255,9 +255,9 @@ fn pump_line_is_inclusive() {
         &[open_trade_session_ix(&t.alice.pubkey(), 0, &t.ka.pubkey(), 2 * LAMPORTS_PER_SOL)],
     )
     .unwrap();
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 900_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, PUMP_GRADUATION_LAMPORTS * 9 / 10)]).unwrap();
     assert_eq!(read_launch(&svm, 0).state, BONDING);
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, 100_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 0, PUMP_GRADUATION_LAMPORTS / 10)]).unwrap();
     let l = read_launch(&svm, 0);
     assert_eq!(l.real_sol_raised, PUMP_GRADUATION_LAMPORTS);
     assert_eq!(l.state, FROZEN);
@@ -943,13 +943,13 @@ fn pump_graduate_spends_the_flip_pot_of_a_fairest_launch() {
     send(&mut svm, &t.creator, &[], &[enable_pump_ix(&t.creator.pubkey(), 1)]).unwrap();
     send(&mut svm, &t.alice, &[], &[open_trade_session_ix(&t.alice.pubkey(), 1, &t.ka.pubkey(), 1_500_000_000)]).unwrap();
     send(&mut svm, &t.bob, &[], &[open_trade_session_ix(&t.bob.pubkey(), 1, &t.kb.pubkey(), 500_000_000)]).unwrap();
-    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix_pump(&t.kb.pubkey(), &t.bob.pubkey(), 1, 200_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.kb], &[buy_ix_pump(&t.kb.pubkey(), &t.bob.pubkey(), 1, PUMP_GRADUATION_LAMPORTS / 5)]).unwrap();
     let held = read_session(&svm, 1, &t.bob.pubkey()).tokens_held;
     // same clock as the buy → age zero → the full 25% rate (fair.rs precedent)
     send(&mut svm, &t.cranker, &[&t.kb], &[sell_ix(&t.kb.pubkey(), &t.bob.pubkey(), 1, held)]).unwrap();
     let tax = read_launch(&svm, 1).flip_pot;
     assert!(tax > 0, "the flip was taxed into the pot");
-    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 1, 1_100_000_000)]).unwrap();
+    send(&mut svm, &t.cranker, &[&t.ka], &[buy_ix_pump(&t.ka.pubkey(), &t.alice.pubkey(), 1, PUMP_GRADUATION_LAMPORTS * 11 / 10)]).unwrap();
     assert_eq!(read_launch(&svm, 1).state, FROZEN);
     send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.bob.pubkey(), 1)]).unwrap();
     send(&mut svm, &t.cranker, &[], &[reconcile_ix(&t.alice.pubkey(), 1)]).unwrap();
