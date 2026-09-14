@@ -27,3 +27,6 @@ scripts/mainnet-canary/
 litesvm-tests/fixtures/
 # pump.fun mint keypairs — the CA is known before launch, the secret never leaves this machine
 scripts/pump-mints/
+
+# pump canary: three throwaway trader keypairs + run state, local only
+scripts/pump-canary/
