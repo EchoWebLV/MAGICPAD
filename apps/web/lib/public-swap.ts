@@ -43,6 +43,7 @@ export type Spot = {
   solPerToken: number;
   supply: string;
   mcSol: number;
+  venue?: 'meteora' | 'raydium';
 };
 
 export async function meteoraSpot(mint: string): Promise<Spot> {

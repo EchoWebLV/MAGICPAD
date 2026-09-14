@@ -43,6 +43,10 @@ export interface PinFields {
   twitter: string;
   telegram: string;
   website: string;
+  venue?: string;
+  pairMint?: string;
+  pairSymbol?: string;
+  dark?: boolean;
 }
 
 /** Pin image + metadata JSON to IPFS through our API route. Returns the
@@ -56,6 +60,10 @@ export async function pinAssets(f: PinFields): Promise<string> {
   form.append('twitter', f.twitter);
   form.append('telegram', f.telegram);
   form.append('website', f.website);
+  if (f.venue) form.append('venue', f.venue);
+  if (f.pairMint) form.append('pairMint', f.pairMint);
+  if (f.pairSymbol) form.append('pairSymbol', f.pairSymbol);
+  if (f.dark !== undefined) form.append('dark', f.dark ? '1' : '0');
   const r = await fetch('/api/pin', { method: 'POST', body: form });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error ?? `pinning failed (${r.status})`);

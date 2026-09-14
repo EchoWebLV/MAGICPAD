@@ -120,7 +120,7 @@ export interface LaunchView {
   tokensSold: number;     // raw units
   sessionsOpened: number;
   mint: string;
-  pump: boolean;          // graduates on pump.fun at 1 SOL
+  pump: boolean;          // graduates on pump.fun at 0.2 SOL
   pumpMint: string | null; // the pump.fun CA once set_pump_mint ran
 }
 
@@ -144,7 +144,7 @@ function toView(id: number, l: any, dark: boolean, pump: { pumpMint: PublicKey }
   };
 }
 
-/** The line a launch freezes at: 1 SOL for pump.fun launches, the env line otherwise. */
+/** The line a launch freezes at: 0.2 SOL for pump.fun launches, the env line otherwise. */
 export const graduationFor = (l: { pump: boolean }): number =>
   l.pump ? PUMP_GRADUATION_LAMPORTS : GRADUATION_LAMPORTS;
 

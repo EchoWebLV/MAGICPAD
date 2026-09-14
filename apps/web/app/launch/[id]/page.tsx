@@ -41,7 +41,7 @@ import {
   meteoraQuote, meteoraSpot, meteoraSwapTx, splHolders,
   type SplHolder, type Spot, type SwapQuote,
 } from '../../../lib/public-swap';
-import { meteoraPoolUrl } from '../../../lib/pool';
+import { meteoraPoolUrl, raydiumPoolUrl } from '../../../lib/pool';
 
 interface Live {
   creator: string; name: string; symbol: string; state: number; dark: boolean; createdTs: number;
@@ -471,8 +471,10 @@ export default function LaunchPage() {
                 <Glyph n="out" size={12} />
               </a>
               {onPool && poolSpot?.pool && (
-                <a href={meteoraPoolUrl(poolSpot.pool)} target="_blank" rel="noreferrer"
-                  aria-label="meteora pool" title={poolSpot.pool} className="faint">
+                <a href={(poolSpot.venue === 'raydium' ? raydiumPoolUrl : meteoraPoolUrl)(poolSpot.pool)}
+                  target="_blank" rel="noreferrer"
+                  aria-label={poolSpot.venue === 'raydium' ? 'raydium pool' : 'meteora pool'}
+                  title={poolSpot.pool} className="faint">
                   pool
                 </a>
               )}
@@ -626,7 +628,7 @@ export default function LaunchPage() {
           <div className="trade-card">
             {onPool && (
               <p className="note" style={{ marginTop: 0 }}>
-                Live on Meteora. Same buy and sell, your wallet signs the swap.
+                Live on {poolSpot?.venue === 'raydium' ? 'Raydium' : 'Meteora'}. Same buy and sell, your wallet signs the swap.
               </p>
             )}
             {l.pump && l.state >= 1 && (

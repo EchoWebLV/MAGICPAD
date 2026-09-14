@@ -148,6 +148,7 @@ export type Spot = {
   solPerToken: number; // UI SOL per UI token
   supply: string;
   mcSol: number;
+  venue?: 'meteora' | 'raydium';
 };
 
 export async function spotMeteora(mintStr: string): Promise<Spot> {
@@ -171,5 +172,6 @@ export async function spotMeteora(mintStr: string): Promise<Spot> {
     solPerToken,
     supply: supply.value.amount,
     mcSol: solPerToken * ui,
+    venue: 'meteora',
   };
 }

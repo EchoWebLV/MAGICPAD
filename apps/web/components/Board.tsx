@@ -122,7 +122,7 @@ function Row({ l, size }: { l: LaunchView; size: number }) {
             <span className="name">{l.name}</span>
             <span className="sym mono">${l.symbol}</span>
             {chip}
-            {l.pump && l.state < 3 && <span className="chip">1◎ → PUMP</span>}
+            {l.pump && l.state < 3 && <span className="chip">0.2◎ → PUMP</span>}
             <span className="age mono">{fmtAge(l.createdTs)}</span>
           </div>
           <div className="stats mono">

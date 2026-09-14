@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import { buildMeteoraSwap, type SwapSide } from '../../../lib/meteora';
+import { buildRaydiumSwap } from '../../../lib/raydium';
 
 export const runtime = 'nodejs';
 
@@ -18,7 +19,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'mint, side, amount, user required' }, { status: 400 });
   }
   try {
-    const tx = await buildMeteoraSwap(mint, side, amount, user);
+    let tx;
+    try { tx = await buildMeteoraSwap(mint, side, amount, user); }
+    catch { tx = await buildRaydiumSwap(mint, side, amount, user); }
     const bh = await rpc.getLatestBlockhash('confirmed');
     tx.feePayer = new PublicKey(user);
     tx.recentBlockhash = bh.blockhash;
@@ -29,7 +32,7 @@ export async function POST(req: Request) {
     });
   } catch (e: any) {
     const msg = String(e?.message ?? e);
-    const status = /no Meteora pool/i.test(msg) ? 404 : 400;
+    const status = /no (Meteora|Raydium) pool|no Raydium route/i.test(msg) ? 404 : 400;
     return NextResponse.json({ error: msg.slice(0, 200) }, { status });
   }
 }

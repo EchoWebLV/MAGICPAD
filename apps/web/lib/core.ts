@@ -31,8 +31,8 @@ export const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss6
 export const LAMPORTS = 1_000_000_000;
 export const GRADUATION_LAMPORTS =
   Number(process.env.NEXT_PUBLIC_GRADUATION_LAMPORTS || 5 * LAMPORTS);
-// pump.fun launches freeze at 1 SOL — fixed in the program (PUMP_GRADUATION_LAMPORTS)
-export const PUMP_GRADUATION_LAMPORTS = 1 * LAMPORTS;
+// pump.fun launches freeze at 0.2 SOL — fixed in the program (PUMP_GRADUATION_LAMPORTS)
+export const PUMP_GRADUATION_LAMPORTS = 200_000_000;
 export const TOKEN_DECIMALS = 6;
 export const TOKEN_TOTAL_SUPPLY = 1_000_000_000_000_000; // raw units
 export const MIN_DEPOSIT = 0.01 * LAMPORTS;
@@ -75,7 +75,7 @@ export const topupPda = (id: number, trader: PublicKey, nonce: number) =>
     new BN(nonce).toArrayLike(Buffer, 'le', 8));
 export const poolRecordPda = (mint: PublicKey) =>
   pda(Buffer.from('pool'), mint.toBuffer());
-// the pump.fun marker: exists ⇔ the launch graduates on pump.fun at 1 SOL
+// the pump.fun marker: exists ⇔ the launch graduates on pump.fun at 0.2 SOL
 export const pumpPda = (id: number) =>
   pda(Buffer.from('pump'), new BN(id).toArrayLike(Buffer, 'le', 8));
 export const pumpUrl = (mint: string) => `https://pump.fun/coin/${mint}`;

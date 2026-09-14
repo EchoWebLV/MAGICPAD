@@ -16,7 +16,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+const require = createRequire(import.meta.url);
 import anchorPkg from '@coral-xyz/anchor';
 import {
   ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction,
@@ -126,10 +128,15 @@ export async function migrateLaunch({
     return null;
   }
 
-  // a pump.fun launch has no Meteora pool to seed — migrate-pump.mjs owns it
+  // a pump.fun launch has no AMM pool to seed — migrate-pump.mjs owns it
   if (await conn.getAccountInfo(pda(PROGRAM_ID, Buffer.from('pump'), le8(id)))) {
     log(`launch ${id}: pump.fun launch — scripts/migrate-pump.mjs owns it`);
     return null;
+  }
+
+  const venue = await readVenue(conn, launch);
+  if (venue === 'raydium') {
+    return migrateRaydium({ conn, program, payer, id, launch, mint, platform, adminAta, l, dry });
   }
 
   const record = readRecord();
@@ -264,6 +271,118 @@ export async function migrateLaunch({
   }
 
   return { pool: pool.toBase58() };
+}
+
+const META_RE = /magicpad:meta:v1:([A-Za-z0-9]+)/;
+const META_GW = 'https://tomato-fancy-finch-338.mypinata.cloud/ipfs/';
+
+async function readVenue(conn, launch) {
+  const sigs = await conn.getSignaturesForAddress(launch, { limit: 40 });
+  for (const s of sigs) {
+    const m = s.memo && META_RE.exec(s.memo);
+    if (!m) continue;
+    try {
+      const json = await fetch(META_GW + m[1]).then((r) => (r.ok ? r.json() : null));
+      if (json?.venue === 'raydium' || json?.venue === 'pump' || json?.venue === 'meteora') {
+        return json.venue;
+      }
+    } catch { /* next memo */ }
+  }
+  return 'meteora';
+}
+
+async function migrateRaydium({ conn, program, payer, id, launch, mint, platform, adminAta, l, dry }) {
+  const {
+    Raydium, TxVersion, CREATE_CPMM_POOL_PROGRAM, CREATE_CPMM_POOL_FEE_ACC,
+  } = require('@raydium-io/raydium-sdk-v2');
+  const { BN: SdkBN } = require('bn.js');
+
+  const record = readRecord();
+  const mintStr = mint.toBase58();
+  let pool = record[mintStr]?.pool ? new PublicKey(record[mintStr].pool) : null;
+
+  const held = await getAccount(conn, adminAta).then((a) => new BN(a.amount.toString())).catch(() => new BN(0));
+  const pot = flipPot(l);
+  const effRaised = l.realSolRaised.add(pot);
+  const want = lpSeed(l, effRaised);
+  const seedTok = BN.min(want, held);
+  const seedSol = effRaised;
+
+  log(`launch ${id} ${l.symbol}: raydium seed ${sol(seedSol)} + ${seedTok.toString()} raw`);
+  if (dry) return { venue: 'raydium', pool: pool?.toBase58() ?? null, seedSol: seedSol.toString(), seedTok: seedTok.toString() };
+
+  if (!pool) {
+    if (seedTok.lten(0) || seedSol.lten(0)) {
+      log(`launch ${id}: nothing to seed`);
+      return null;
+    }
+    const raydium = await Raydium.load({
+      connection: conn,
+      owner: payer,
+      disableLoadToken: true,
+      blockhashCommitment: 'confirmed',
+    });
+    const feeConfigs = await raydium.api.getCpmmConfigs();
+    const feeConfig = feeConfigs.find((c) => c.index === 0) ?? feeConfigs[0];
+    const { execute, extInfo } = await raydium.cpmm.createPool({
+      programId: CREATE_CPMM_POOL_PROGRAM,
+      poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC,
+      mintA: { address: mint.toBase58(), decimals: 6, programId: TOKEN_PROGRAM_ID.toBase58() },
+      mintB: { address: NATIVE_MINT.toBase58(), decimals: 9, programId: TOKEN_PROGRAM_ID.toBase58() },
+      mintAAmount: new SdkBN(seedTok.toString()),
+      mintBAmount: new SdkBN(seedSol.toString()),
+      startTime: new SdkBN(0),
+      feeConfig,
+      associatedOnly: false,
+      ownerInfo: { useSOLBalance: true },
+      txVersion: TxVersion.LEGACY,
+      computeBudgetConfig: {
+        units: 600_000,
+        microLamports: Number(process.env.CU_PRICE || 50_000),
+      },
+    });
+    const { txId } = await execute({ sendAndConfirm: true });
+    pool = new PublicKey(extInfo.address.poolId);
+    record[mintStr] = {
+      id, symbol: l.symbol, venue: 'raydium', pool: pool.toBase58(),
+      seedSol: seedSol.toString(), seedTok: seedTok.toString(), sig: txId, at: Date.now(),
+    };
+    writeRecord(record);
+    log(`launch ${id}: raydium pool ${pool.toBase58()}  ${txId.slice(0, 16)}…`);
+  } else {
+    log(`launch ${id}: raydium pool already ${pool.toBase58()}`);
+  }
+
+  const recPda = pda(PROGRAM_ID, Buffer.from('pool'), mint.toBuffer());
+  if (!(await conn.getAccountInfo(recPda, 'confirmed'))) {
+    const ix = await program.methods.recordPool(pool).accountsPartial({
+      admin: payer.publicKey, platform, launch, mint,
+      migratedPool: recPda, systemProgram: SystemProgram.programId,
+    }).instruction();
+    const sig = await sendTx(conn, payer, new Transaction().add(ix));
+    log(`launch ${id}: pool recorded ${pool.toBase58()}  ${sig.slice(0, 16)}…`);
+  }
+
+  const mintAcc = await conn.getParsedAccountInfo(mint, 'confirmed');
+  const auth = mintAcc.value?.data?.parsed?.info?.mintAuthority ?? null;
+  if (auth) {
+    const ix = await program.methods.lockMint().accountsPartial({
+      platform, launch, mint, tokenProgram: TOKEN_PROGRAM_ID,
+    }).instruction();
+    const sig = await sendTx(conn, payer, new Transaction().add(ix));
+    log(`launch ${id}: mint locked  ${sig.slice(0, 16)}…`);
+  }
+
+  const still = await getAccount(conn, adminAta).then((a) => new BN(a.amount.toString())).catch(() => new BN(0));
+  const TOTAL = new BN('1000000000000000');
+  const leftoverMinted = TOTAL.sub(l.tokensSold);
+  const toBurn = BN.max(new BN(0), BN.min(still, leftoverMinted.sub(seedTok)));
+  if (toBurn.gtn(0)) {
+    const burnIx = createBurnInstruction(adminAta, mint, payer.publicKey, BigInt(toBurn.toString()));
+    const sig = await sendTx(conn, payer, new Transaction().add(burnIx));
+    log(`launch ${id}: burned leftover ${toBurn.toString()}  ${sig.slice(0, 16)}…`);
+  }
+  return { pool: pool.toBase58(), venue: 'raydium' };
 }
 
 async function main() {

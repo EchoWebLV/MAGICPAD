@@ -56,6 +56,10 @@ export async function POST(req: Request) {
     telegram: str(form, 'telegram', 120),
     website: str(form, 'website', 120),
   };
+  const venue = str(form, 'venue', 16);
+  const pairMint = str(form, 'pairMint', 64);
+  const pairSymbol = str(form, 'pairSymbol', 16);
+  const dark = str(form, 'dark', 4) === '1';
 
   try {
     const imageCid = await pin(
@@ -69,6 +73,9 @@ export async function POST(req: Request) {
       ...(description ? { description } : {}),
       image: `ipfs://${imageCid}`,
       ...(Object.keys(extensions).length ? { extensions } : {}),
+      ...(venue ? { venue } : {}),
+      ...(pairMint ? { pairMint, pairSymbol } : {}),
+      dark,
     };
     const cid = await pin(
       jwt, new Blob([JSON.stringify(metadata)], { type: 'application/json' }), 'metadata.json',

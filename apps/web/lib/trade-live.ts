@@ -542,7 +542,7 @@ export async function buyLive(wallet: WalletLike, id: number, lamports: number):
   // on-chain with AccountNotInitialized. The devnet IDL has no such slot and
   // ignores the key.
   // A read that FAILED must not become a wrong-line buy: the standard line
-  // on a 1◎ launch bonds straight past it. Refuse and let them retry.
+  // on a 0.2◎ launch bonds straight past it. Refuse and let them retry.
   const pv = await readPumpLaunch(id);
   if (pv === undefined) throw pumpUnreadable(id);
   const pump = { pump: pv ? pumpPda(id) : (null as any) };

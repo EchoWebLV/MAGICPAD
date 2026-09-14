@@ -19,16 +19,20 @@ import { BN } from '@coral-xyz/anchor';
 import { useActiveWallet } from '../../lib/use-active-wallet';
 import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import {
-  CLUSTER, CONFIG, DLP, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, PLATFORM,
+  CLUSTER, CONFIG, DLP, GRADUATION_LAMPORTS, LAMPORTS, MIN_DEPOSIT, PLATFORM, PUMP_GRADUATION_LAMPORTS,
   PROGRAM_ID, TOKEN_PROGRAM, VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT,
   buyQuote, fetchFees, fmtSol, fmtTok, launchPda, mintPda, program, pumpPda, sessionPda,
 } from '../../lib/magicpad';
 import { metaMemoIx, pinAssets, squashImage } from '../../lib/metadata';
+import { fallbackPairs, findPair, isCorePair, isStockPair, SOL_MINT, type QuotePair, type Venue } from '../../lib/pairings';
 import { gateEntry, launchSessionKey } from '../../lib/trade-live';
 import { requestAirdrop, sendWithWallet, walletBalance } from '../../lib/wallet-tx';
 
+const VENUES: Venue[] = ['pump', 'meteora', 'raydium'];
+const VENUE_LABEL: Record<Venue, string> = { pump: 'Pump', meteora: 'Meteora', raydium: 'Raydium' };
+
 const DEV_BUY_MIN = MIN_DEPOSIT / LAMPORTS;
-const DEV_BUY_MAX = (GRADUATION_LAMPORTS - 1) / LAMPORTS; // 5◎ freezes; then delegate_launch refuses
+// the first buy must stay under the venue's line: crossing it freezes the curve in the creation tx and delegate_launch refuses
 const DEV_BUY_PRESETS = [0.1, 0.5, 1, 2, 3] as const;
 
 const delegationMetas = (target: PublicKey, suffix: string) => {
@@ -65,7 +69,13 @@ export default function Create() {
   const [taxBps, setTaxBps] = useState(0);
   const [fairest, setFairest] = useState(false);
   const [fairInfo, setFairInfo] = useState(false);
-  const [pump, setPump] = useState(false);   // graduate on pump.fun at 1 SOL (mainnet only)
+  const [venue, setVenue] = useState<Venue>('meteora');
+  const [dark, setDark] = useState(true);
+  const [pairMint, setPairMint] = useState(SOL_MINT);
+  const [pairs, setPairs] = useState<QuotePair[]>(() => fallbackPairs('meteora'));
+  const [pairOpen, setPairOpen] = useState(false);
+  const [pairQ, setPairQ] = useState('');
+  const pairBoxRef = useRef<HTMLDivElement>(null);
 
   const refreshBal = useCallback(() => {
     if (!publicKey) { setBal(null); return; }
@@ -76,11 +86,56 @@ export default function Create() {
     fetchFees().then((f) => { setFee(f.launchFeeLamports); setTaxBps(f.launchTaxBps); }).catch(() => {});
   }, []);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+  useEffect(() => {
+    let on = true;
+    setPairs(fallbackPairs(venue));
+    fetch(`/api/pairs?venue=${venue}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (!on || !Array.isArray(j.pairs)) return;
+        setPairs(j.pairs);
+        if (!j.pairs.some((p: QuotePair) => p.mint === pairMint)) setPairMint(j.pairs[0]?.mint ?? SOL_MINT);
+      })
+      .catch(() => {});
+    return () => { on = false; };
+  }, [venue]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!pairOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!pairBoxRef.current?.contains(e.target as Node)) {
+        setPairOpen(false); setPairQ('');
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setPairOpen(false); setPairQ(''); }
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pairOpen]);
+
+  const pump = venue === 'pump';
+  const pair = findPair(pairs, pairMint);
+  const corePairs = pairs.filter(isCorePair);
+  const stockPairs = pairs.filter(isStockPair);
+  const pairQLower = pairQ.trim().toLowerCase();
+  const stockHits = (pairQLower
+    ? stockPairs.filter((p) =>
+      p.symbol.toLowerCase().includes(pairQLower)
+      || p.name.toLowerCase().includes(pairQLower))
+    : stockPairs)
+    .filter((p, i, all) => all.findIndex((x) => x.mint === p.mint) === i);
+  const stockSelected = isStockPair(pair);
 
   const dv = devBuy.trim() === '' ? 0 : Number(devBuy);
-  const overCurve = Number.isFinite(dv) && dv > 0 && dv > DEV_BUY_MAX;
-  const devOk = dv === 0 || (Number.isFinite(dv) && dv >= DEV_BUY_MIN && dv <= DEV_BUY_MAX);
-  const devLamports = !fairest && !pump && devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
+  const devBuyMax = ((pump ? PUMP_GRADUATION_LAMPORTS : GRADUATION_LAMPORTS) - 1) / LAMPORTS;
+  const overCurve = Number.isFinite(dv) && dv > 0 && dv > devBuyMax;
+  const devOk = dv === 0 || (Number.isFinite(dv) && dv >= DEV_BUY_MIN && dv <= devBuyMax);
+  const noFirstBuy = fairest;
+  const devLamports = !noFirstBuy && devOk && dv > 0 ? Math.round(dv * 1e9) : 0;
   // the creator is the first buy by construction — this quote IS the fill
   const alloc = devLamports > 0
     ? buyQuote(VIRTUAL_SOL_INIT, VIRTUAL_TOK_INIT, BigInt(devLamports)) : 0n;
@@ -108,6 +163,7 @@ export default function Create() {
         image: squashed, name: name.trim(), symbol: symbol.trim().toUpperCase(),
         description: description.trim(), twitter: twitter.trim(),
         telegram: telegram.trim(), website: website.trim(),
+        venue, pairMint: pair.mint, pairSymbol: pair.symbol, dark,
       });
       const platform = await (program.account as any).platform.fetch(PLATFORM);
       const id = platform.launchSeq.toNumber();
@@ -125,7 +181,7 @@ export default function Create() {
       );
       // the marker must exist before the first trade (enable_pump → PumpTooLate
       // afterwards), so it rides in the creation tx
-      if (pump) {
+      if (pump && CLUSTER === 'mainnet') {
         tx.add(await program.methods.enablePump(new BN(id)).accountsPartial({
           creator: publicKey, launch, pump: pumpPda(id), systemProgram: SystemProgram.programId,
         }).instruction());
@@ -147,18 +203,21 @@ export default function Create() {
             gateSigner: gate.gateSigner,
           }).instruction(),
           await program.methods.buy(new BN(devLamports)).accountsPartial({
-            sessionSigner: sk.publicKey, session, launch, pump: null as any,
+            sessionSigner: sk.publicKey, session, launch,
+            pump: pump && CLUSTER === 'mainnet' ? pumpPda(id) : (null as any),
           }).instruction(),
         );
-        tx.add(
-          await program.methods.delegateLaunch(new BN(id)).accountsPartial({
-            payer: publicKey, platform: PLATFORM, launch, ...delegationMetas(launch, 'Launch'),
-          }).instruction(),
-          await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
-            payer: publicKey, session, ...delegationMetas(session, 'Session'),
-          }).instruction(),
-        );
-      } else {
+        if (dark) {
+          tx.add(
+            await program.methods.delegateLaunch(new BN(id)).accountsPartial({
+              payer: publicKey, platform: PLATFORM, launch, ...delegationMetas(launch, 'Launch'),
+            }).instruction(),
+            await program.methods.delegateTradeSession(new BN(id)).accountsPartial({
+              payer: publicKey, session, ...delegationMetas(session, 'Session'),
+            }).instruction(),
+          );
+        }
+      } else if (dark) {
         tx.add(
           await program.methods.delegateLaunch(new BN(id)).accountsPartial({
             payer: publicKey, platform: PLATFORM, launch, ...delegationMetas(launch, 'Launch'),
@@ -185,91 +244,150 @@ export default function Create() {
     setBusy(false);
   }
 
+  const ticker = symbol.trim().toUpperCase();
+  const curvePct = 79.31;
+  const seedPct = 20.69;
+  const dest = VENUE_LABEL[venue];
+  const darkSol = fmtSol(pump ? PUMP_GRADUATION_LAMPORTS : GRADUATION_LAMPORTS);
+  const launchCost = fee + devLamports;
+  const launchLabel = busy
+    ? (msg || 'Launching…')
+    : devLamports > 0
+      ? `Launch · ${fmtSol(launchCost)}◎`
+      : fee === 0 ? 'Launch' : `Launch · ${fmtSol(fee)}◎`;
+
   return (
-    <main className="wrap" style={{ maxWidth: 480, margin: '0 auto', paddingTop: 28 }}>
-      <div className="panel">
-        <h3>Launch a market</h3>
-        <div className="imgpick">
-          <div className="drop" onClick={() => fileRef.current?.click()} title="pick an image">
-            {preview ? <img src={preview} alt="token" /> : '+'}
+    <main className="launch">
+      <section className="launch-card">
+        <h2>Launch a coin</h2>
+
+        <div className="launch-seg" role="tablist" aria-label="Graduation destination">
+          {VENUES.map((v) => (
+            <button
+              key={v} type="button" role="tab" aria-selected={venue === v}
+              className={venue === v ? 'on' : ''}
+              onClick={() => setVenue(v)}
+            >
+              {VENUE_LABEL[v]}
+            </button>
+          ))}
+        </div>
+
+        <div className="launch-top">
+          <button
+            type="button"
+            className={`launch-img${preview ? ' has' : ''}`}
+            onClick={() => fileRef.current?.click()}
+            title="pick an image"
+          >
+            {preview ? <img src={preview} alt="" /> : (
+              <>
+                <span className="launch-img-ico" aria-hidden>+</span>
+                <span>Add image</span>
+              </>
+            )}
+          </button>
+          <input
+            ref={fileRef} type="file" accept="image/*" hidden
+            onChange={(e) => pickImage(e.target.files?.[0])}
+          />
+          <div className="launch-meta">
+            <div className="launch-pair">
+              <label className="launch-lab">
+                <span>Name</span>
+                <em>{name.length}/32</em>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Token name" maxLength={32} />
+              </label>
+              <label className="launch-lab">
+                <span>Ticker</span>
+                <em>{symbol.length}/10</em>
+                <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="SYMBOL" maxLength={10} />
+              </label>
+            </div>
+            <label className="launch-lab">
+              <span>Description</span>
+              <em>{description.length}/500</em>
+              <textarea
+                value={description} onChange={(e) => setDescription(e.target.value.slice(0, 500))}
+                placeholder="What the coin is, in a line or two." rows={3} maxLength={500}
+              />
+            </label>
           </div>
-          <div>
-            <div className="hint">token image. square looks best,
-              <br />resized to 512px before upload</div>
+        </div>
+
+        <label className="launch-lab">
+          <span>X</span>
+          <em>{twitter.length}/120</em>
+          <input value={twitter} onChange={(e) => setTwitter(e.target.value)} placeholder="x.com/you, or a link to the tweet" maxLength={120} />
+        </label>
+
+        <div className="launch-buy">
+          <div className="launch-buy-copy">
+            <h3>Your first buy</h3>
+            <p>
+              First fill is in SOL on the Mooner curve. After graduation the pool is priced
+              against {pair.symbol}.
+            </p>
+          </div>
+          <div className="launch-buy-row">
+            <div className="launch-pills">
+              <button type="button" disabled={noFirstBuy} className={dv === 0 ? 'on' : ''} onClick={() => setDevBuy('')}>None</button>
+              {DEV_BUY_PRESETS.map((n) => (
+                <button
+                  key={n} type="button" disabled={noFirstBuy || n > devBuyMax}
+                  className={dv === n ? 'on' : ''} onClick={() => setDevBuy(String(n))}
+                >{n} SOL</button>
+              ))}
+            </div>
             <input
-              ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
-              onChange={(e) => pickImage(e.target.files?.[0])}
+              className="launch-amt"
+              value={devBuy} onChange={(e) => setDevBuy(e.target.value)}
+              placeholder="0" inputMode="decimal" disabled={noFirstBuy}
             />
           </div>
-        </div>
-        <div className="field">
-          <label>name (≤ 32 chars)</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="MIDNIGHT RUNNER" maxLength={32} />
-        </div>
-        <div className="field">
-          <label>ticker (≤ 10 chars)</label>
-          <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="MIDNIGHT" maxLength={10} />
-        </div>
-        <div className="field">
-          <label>buy at launch (◎), any size</label>
-          <div className="presets" style={{ margin: '0 0 8px' }}>
-            <button type="button" disabled={fairest || pump} className={`preset${dv === 0 ? ' on' : ''}`} onClick={() => setDevBuy('')}>
-              none
-            </button>
-            {DEV_BUY_PRESETS.map((n) => (
-              <button
-                key={n}
-                type="button"
-                disabled={fairest || pump}
-                className={`preset${dv === n ? ' on' : ''}`}
-                onClick={() => setDevBuy(String(n))}
-              >
-                {n}◎
-              </button>
-            ))}
-          </div>
-          <input
-            value={devBuy} onChange={(e) => setDevBuy(e.target.value)}
-            placeholder="0.25, 1, 2.5…" inputMode="decimal" disabled={fairest || pump}
-          />
           {devLamports > 0 && (
-            <p className="note" style={{ marginTop: 6 }}>
-              you are the first buy, so this fill is exact:{' '}
-              <span className="mono green">{fmtTok(alloc)} {symbol.trim().toUpperCase() || 'tokens'}</span>
-              {' '}({allocPct.toFixed(2)}% of supply), held in your session and tradeable instantly
+            <p className="launch-hint">
+              Exact fill: <b>{fmtTok(alloc)} {ticker || 'tokens'}</b> ({allocPct.toFixed(2)}% of supply)
             </p>
           )}
           {!devOk && dv !== 0 && !overCurve && (
-            <p className="note" style={{ marginTop: 6 }}>
-              first buy has to be at least {DEV_BUY_MIN}◎ (the escrow floor)
-            </p>
+            <p className="launch-hint">First buy has to be at least {DEV_BUY_MIN}◎.</p>
           )}
           {overCurve && (
-            <p className="note" style={{ marginTop: 6 }}>
-              keep it under {fmtSol(GRADUATION_LAMPORTS)}◎. that size fills the whole curve
-              and freezes the market in the same tx, before it can go dark
-            </p>
+            <p className="launch-hint">Keep it under {fmtSol(pump ? PUMP_GRADUATION_LAMPORTS : GRADUATION_LAMPORTS)}◎ or the curve freezes in the same tx.</p>
           )}
         </div>
-        <div className="field">
-          <div className="fairrow">
-            <label className="faircheck">
+
+        <div className="launch-opts">
+          <label className="check">
+            <input type="checkbox" checked={dark} onChange={(e) => setDark(e.target.checked)} />
+            <i aria-hidden />
+            <span>Dark for first {darkSol}◎</span>
+          </label>
+          {dark && (
+            <p className="launch-hint">
+              The first {darkSol}◎ of the curve trades in the rollup. Then it goes public on {dest}
+              {pair.symbol !== 'SOL' ? ` / ${pair.symbol}` : ''}.
+            </p>
+          )}
+          {!dark && (
+            <p className="launch-hint">
+              No rollup. The market stays visible on L1 and graduates to {dest}.
+            </p>
+          )}
+
+          <div className="checkrow">
+            <label className="check">
               <input
                 type="checkbox" checked={fairest}
                 onChange={(e) => { setFairest(e.target.checked); if (e.target.checked) setDevBuy(''); }}
               />
-              <span>fairest launch</span>
+              <i aria-hidden />
+              <span>Fairest launch</span>
             </label>
-            <button
-              type="button" className="infoi" aria-label="what is fairest launch"
-              onClick={() => setFairInfo((v) => !v)}
-            >i</button>
+            <button type="button" className="infoi" aria-label="what is fairest launch" onClick={() => setFairInfo((v) => !v)}>i</button>
           </div>
-          {fairest && (
-            <p className="note" style={{ marginTop: 6 }}>
-              your first buy is off. you enter through the same gate as everyone else
-            </p>
-          )}
+          {fairest && <p className="launch-hint">Your first buy is off. You enter through the same gate as everyone else.</p>}
           {fairInfo && (
             <div className="fairbox">
               <p><span className="fb-k">every market here</span> already launches dark: entry is
@@ -285,94 +403,125 @@ export default function Create() {
                 scalpers fund the liquidity they tried to drain.</p>
             </div>
           )}
-        </div>
-        {CLUSTER === 'mainnet' && (
-          <div className="field">
-            <div className="fairrow">
-              <label className="faircheck">
-                <input
-                  type="checkbox" checked={pump}
-                  onChange={(e) => { setPump(e.target.checked); if (e.target.checked) setDevBuy(''); }}
-                />
-                <span>graduate on pump.fun at 1◎</span>
-              </label>
-            </div>
-            {pump && (
-              <p className="note" style={{ marginTop: 6 }}>
-                the dark curve stops at 1◎ instead of {fmtSol(GRADUATION_LAMPORTS, 0)}◎. the pot then
-                buys every holder&apos;s share on pump.fun straight into their wallet — no pool, no claim,
-                no first buy. the token page gets a pump.fun link once it&apos;s live.
-              </p>
-            )}
-          </div>
-        )}
-        <div className="field">
-          <label>description (optional)</label>
-          <textarea
-            value={description} onChange={(e) => setDescription(e.target.value)}
-            placeholder="what is this market about" rows={3} maxLength={600}
-          />
-        </div>
-        <div className="field">
-          <label>links (optional)</label>
-          <div className="fieldrow">
-            <input value={twitter} onChange={(e) => setTwitter(e.target.value)} placeholder="x.com/…" maxLength={120} />
-            <input value={telegram} onChange={(e) => setTelegram(e.target.value)} placeholder="t.me/…" maxLength={120} />
-          </div>
-          <input
-            style={{ marginTop: 8 }}
-            value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="website" maxLength={120}
-          />
-        </div>
-        <div className="kv"><span className="k">launch fee</span><span className="mono">{fee === 0 ? 'free' : `${fmtSol(fee)}◎`}</span></div>
-        {taxBps > 0 && (
-          <div className="kv"><span className="k">graduation tax</span><span className="mono">{(taxBps / 100).toFixed(2)}%</span></div>
-        )}
-        {devLamports > 0 && (
-          <div className="kv"><span className="k">your first buy</span><span className="mono">{fmtSol(devLamports)}◎</span></div>
-        )}
-        <div className="kv"><span className="k">trading fees</span><span className="mono green">zero</span></div>
-        <div className="kv"><span className="k">wallet balance</span>
-          <span className="mono">{!publicKey ? 'not connected' : bal === null ? '…' : `${fmtSol(bal)}◎`}</span></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <button className="btn" disabled={busy || !publicKey || !valid || !canAfford} onClick={submit}>
-            {devLamports > 0
-              ? `Launch + buy · ${fmtSol(fee + devLamports)}◎`
-              : fee === 0 ? 'Launch dark' : `Launch dark · ${fmtSol(fee)}◎`}
-          </button>
-          {publicKey && !canAfford && CLUSTER !== 'mainnet' && (
-            <button className="btn ghost" disabled={busy} onClick={airdrop}>Airdrop 1◎</button>
+
+          {pump && (
+            <p className="launch-hint">
+              Pump mode still freezes the dark curve at {fmtSol(PUMP_GRADUATION_LAMPORTS)}◎. Holders are bought onto pump.fun
+              against {pair.symbol} — no pool, no claim.
+            </p>
           )}
         </div>
-        {!publicKey && (
-          <p className="note">
-            connect your wallet (top right) to launch{CLUSTER !== 'mainnet' && '. this is devnet, any wallet works'}
+
+        <div className="launch-pairwith" ref={pairBoxRef}>
+          <div className="launch-pairwith-head">
+            <span>Paired with</span>
+            <em>{dest}</em>
+          </div>
+          <div className="launch-pills">
+            {corePairs.map((p) => (
+              <button
+                key={p.mint} type="button"
+                className={!stockSelected && p.mint === pair.mint ? 'on' : ''}
+                onClick={() => { setPairMint(p.mint); setPairOpen(false); setPairQ(''); }}
+              >
+                {p.symbol}
+              </button>
+            ))}
+          </div>
+          <label className="launch-lab">
+            <span>Stock</span>
+            <em>{stockPairs.length} listed</em>
+            <div className={`launch-dd${pairOpen ? ' open' : ''}${stockSelected ? ' picked' : ''}`}>
+              <input
+                className="launch-dd-search"
+                value={pairOpen ? pairQ : (stockSelected ? `${pair.symbol} — ${pair.name}` : '')}
+                onChange={(e) => { setPairQ(e.target.value); setPairOpen(true); }}
+                onFocus={() => { setPairOpen(true); setPairQ(''); }}
+                placeholder="Search NVDA, AAPL, TSLA…"
+                autoComplete="off"
+              />
+              <i aria-hidden>{pairOpen ? '▴' : '▾'}</i>
+              {pairOpen && (
+                <div className="launch-dd-list" role="listbox">
+                  {stockHits.length === 0 && <p className="launch-hint">No stock matches “{pairQ}”.</p>}
+                  {stockHits.map((p) => (
+                    <button
+                      key={p.mint} type="button" role="option"
+                      className={p.mint === pair.mint ? 'on' : ''}
+                      onClick={() => { setPairMint(p.mint); setPairOpen(false); setPairQ(''); }}
+                    >
+                      <b>{p.symbol}</b>
+                      <i>{p.name}</i>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </label>
+          <p className="launch-hint">
+            Priced and traded against {pair.symbol} on {dest}
+            {stockSelected ? ' — tokenized stock quote' : ''}.
           </p>
+        </div>
+
+        <div className="launch-links">
+          <label className="launch-lab">
+            <span>Telegram</span>
+            <input value={telegram} onChange={(e) => setTelegram(e.target.value)} placeholder="t.me/…" maxLength={120} />
+          </label>
+          <label className="launch-lab">
+            <span>Website</span>
+            <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="yoursite.com" maxLength={120} />
+          </label>
+        </div>
+      </section>
+
+      <aside className="launch-sum">
+        <h2>Launch summary</h2>
+        <div className="launch-kv"><span>Graduates to</span><b>{dest}</b></div>
+        <div className="launch-kv"><span>Paired with</span><b>{pair.symbol}</b></div>
+        <div className="launch-kv"><span>Dark window</span><b>{dark ? `First ${darkSol}◎` : 'Off'}</b></div>
+        <div className="launch-kv"><span>Your share</span><b>{devLamports > 0 ? `${allocPct.toFixed(2)}%` : 'None'}</b></div>
+        <div className="launch-kv"><span>First buy</span><b>{devLamports > 0 ? `${fmtSol(devLamports)}◎` : '—'}</b></div>
+        <div className="launch-kv"><span>Launch fee</span><b>{fee === 0 ? 'Free' : `${fmtSol(fee)}◎`}</b></div>
+        {taxBps > 0 && (
+          <div className="launch-kv"><span>Graduation tax</span><b>{(taxBps / 100).toFixed(2)}%</b></div>
         )}
+        <div className="launch-kv"><span>Wallet</span>
+          <b>{!publicKey ? 'Not connected' : bal === null ? '…' : `${fmtSol(bal)}◎`}</b>
+        </div>
+
+        <div className="launch-fees">
+          <span>Where the supply goes</span>
+          <div className="launch-bar" aria-hidden>
+            <i style={{ width: `${curvePct}%` }} />
+          </div>
+          <ul>
+            <li><i className="dot y" /> Curve / holders <em>{curvePct}%</em></li>
+            <li><i className="dot dim" /> {pump ? `Bought onto pump.fun / ${pair.symbol}` : `Graduation seed (${pair.symbol})`} <em>{seedPct}%</em></li>
+          </ul>
+        </div>
+
+        <button className="btn launch-go" disabled={busy || !publicKey || !valid || !canAfford} onClick={submit}>
+          {launchLabel}
+        </button>
+        {publicKey && !canAfford && CLUSTER !== 'mainnet' && (
+          <button className="btn ghost launch-go" disabled={busy} onClick={airdrop}>Airdrop 1◎</button>
+        )}
+
+        {!publicKey && <p className="launch-hint">Connect your wallet (top right) to launch.</p>}
         {publicKey && valid === false && image === null && name && symbol && (
-          <p className="note">pick an image. markets without a face don&apos;t get traded</p>
+          <p className="launch-hint">Pick an image. Markets without a face don&apos;t get traded.</p>
         )}
         {publicKey && !canAfford && bal !== null && (
-          <p className="note">
-            you need {fmtSol(fee + devLamports)}◎ plus a little dust.{' '}
-            {CLUSTER === 'mainnet' ? 'top the wallet up and this unlocks' : 'airdrop devnet SOL or top the wallet up'}
-          </p>
-        )}
-        {devLamports > 0 ? (
-          <p className="note">
-            One transaction does all of it: the market is born, your buy lands on the
-            curve, and everything goes dark in the Ephemeral Rollup. Your position
-            exists before anyone can even see the token.
-          </p>
-        ) : (
-          <p className="note">
-            The token mint exists from second zero with zero supply. All bonding happens dark
-            inside the Ephemeral Rollup, with no L1 trail to snipe and no gas to pay.
+          <p className="launch-hint">
+            You need {fmtSol(launchCost)}◎ plus a little dust.
+            {CLUSTER === 'mainnet' ? ' Top the wallet up and this unlocks.' : ' Airdrop or top the wallet up.'}
           </p>
         )}
         {msg && <p className="ok">{msg}</p>}
         {err && <p className="err">{err}</p>}
-      </div>
+      </aside>
     </main>
   );
 }
